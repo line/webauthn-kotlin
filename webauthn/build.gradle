@@ -1,0 +1,186 @@
+/*
+ * Copyright 2024 LY Corporation
+ *
+ * LY Corporation licenses this file to you under the Apache License,
+ * version 2.0 (the "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at:
+ *
+ *   https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ */
+
+import org.codehaus.groovy.runtime.GStringImpl
+import org.jetbrains.kotlin.gradle.tasks.KaptGenerateStubs
+
+buildscript {
+    project.ext.isSnapshot = project.snapshotBuild.toBoolean()
+
+    def commitId = "git rev-parse --short HEAD".execute().text.trim()
+
+    if (project.ext.isSnapshot) {
+        project.ext.versionName = "${project.versionMajor}.${project.versionMinor}.${project.versionPatch}-${commitId}-SNAPSHOT" as GStringImpl
+    } else {
+        project.ext.versionName = "${project.versionMajor}.${project.versionMinor}.${project.versionPatch}" as GStringImpl
+    }
+}
+
+
+plugins {
+    id "maven-publish"
+    id "com.android.library"
+    id "kotlin-android"
+    id "kotlin-kapt"
+    id "org.jetbrains.kotlin.android"
+    id "de.mannodermaus.android-junit5"
+    id "org.jlleitschuh.gradle.ktlint" version "12.0.3"
+}
+
+android {
+    namespace "com.lycorp.webauthn"
+    compileSdk 33
+
+    defaultConfig {
+        minSdkVersion 28
+        targetSdk 33
+        versionCode 1
+        versionName "1.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunnerArgument("runnerBuilder", "de.mannodermaus.junit5.AndroidJUnit5Builder")
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+    kotlinOptions {
+        jvmTarget = "11"
+    }
+    testOptions {
+        unitTests.all {
+            it.useJUnitPlatform()
+        }
+        unitTests {
+            includeAndroidResources = true
+        }
+    }
+    packagingOptions {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1,LICENSE.md,LICENSE-notice.md,NOTICE.md}"
+        }
+    }
+}
+
+tasks.withType(KaptGenerateStubs).configureEach{kotlinOptions{jvmTarget = "11"}}
+
+kotlin {
+    jvmToolchain(11)
+}
+
+dependencies {
+    implementation "androidx.core:core-ktx:$project.coreVersion"
+    implementation "androidx.appcompat:appcompat:$project.appcompatVersion"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$project.kotlinxCoroutinesVersion"
+    implementation 'androidx.test.ext:junit-ktx:1.1.5'
+
+    // library for test
+    androidTestImplementation "org.jetbrains.kotlin:kotlin-test-junit:$project.kotlinTestJunitVersion"
+    androidTestImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:$project.kotlinxCoroutinesVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$project.espressoVersion"
+    androidTestImplementation "io.mockk:mockk-android:$project.mockkVersion"
+    androidTestImplementation "androidx.fragment:fragment-testing:$project.fragmentTestingVersion"
+    testImplementation "io.mockk:mockk-android:$project.mockkVersion"
+    testImplementation "org.jetbrains.kotlin:kotlin-test-junit:$project.kotlinTestJunitVersion"
+    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:$project.kotlinxCoroutinesVersion"
+
+    // junit5
+    testImplementation platform("org.junit:junit-bom:$project.junit5Version")
+    testImplementation "org.junit.jupiter:junit-jupiter-api"
+    testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine"
+    testImplementation "org.junit.jupiter:junit-jupiter-params:$project.junit5Version"
+
+    androidTestImplementation platform("org.junit:junit-bom:$project.junit5Version")
+    androidTestImplementation "org.junit.jupiter:junit-jupiter-api"
+    androidTestRuntimeOnly "org.junit.jupiter:junit-jupiter-engine"
+
+    // assertJ
+    androidTestImplementation("org.assertj:assertj-core:$project.assertJVersion")
+
+    // cbor
+    implementation group: "co.nstant.in", name: "cbor", version: "0.9"
+
+    // coroutine
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$project.kotlinxCoroutinesVersion"
+
+    // androidx biometric
+    implementation "androidx.biometric:biometric:$project.biometricVersion"
+
+    // Room
+    implementation "androidx.room:room-runtime:$project.roomVersion"
+    kapt "androidx.room:room-compiler:$project.roomVersion"
+    implementation "androidx.room:room-ktx:$project.roomVersion"
+    androidTestImplementation "androidx.room:room-testing:$project.roomVersion"
+
+    // serialization
+    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:$project.kotlinxSerializationVersion"
+
+    // Gson
+    implementation "com.google.code.gson:gson:$project.gsonVersion"
+
+    // Kotest
+    testImplementation "io.kotest:kotest-runner-junit5-jvm:$project.kotestVersion"
+    testImplementation "io.kotest:kotest-assertions-core-jvm:$project.kotestVersion"
+    testImplementation "io.kotest:kotest-property:$project.kotestVersion"
+    testImplementation "io.kotest:kotest-framework-datatest:$project.kotestVersion"
+
+    implementation "org.jetbrains.kotlin:kotlin-reflect:$project.kotlinVersion"
+}
+
+android.libraryVariants.all { variant ->
+    variant.outputs.all {
+        outputFileName = "webauthn-kotlin-release.aar"
+    }
+}
+
+publishing {
+    publications {
+        webauthnKotlinAar(MavenPublication) {
+            groupId = "com.lycorp.webauthn"
+            artifactId = "webauthn-kotlin"
+            version = project.ext.versionName
+            pom {
+                name = "webauthn-kotlin"
+                description = "A Kotlin library for implementing WebAuthn authentication in Android applications."
+                url = "https://github.com/line/webauthn-kotlin"
+            }
+            artifact("$buildDir/outputs/aar/webauthn-kotlin-release.aar")
+            pom.withXml {
+                final dependenciesNode = asNode().appendNode('dependencies')
+
+                configurations.implementation.allDependencies.each {
+                    final dependencyNode = dependenciesNode.appendNode('dependency')
+                    dependencyNode.appendNode('groupId', it.group)
+                    dependencyNode.appendNode('artifactId', it.name)
+                    dependencyNode.appendNode('version', it.version)
+                }
+
+                configurations.api.allDependencies.each {
+                    final dependencyNode = dependenciesNode.appendNode('dependency')
+                    dependencyNode.appendNode('groupId', it.group)
+                    dependencyNode.appendNode('artifactId', it.name)
+                    dependencyNode.appendNode('version', it.version)
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,100 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_size = 4
+indent_style = space
+insert_final_newline = true
+max_line_length = 120
+tab_width = 4
+trim_trailing_whitespace = true
+ij_continuation_indent_size = 8
+ij_smart_tabs = false
+
+[{*.kt,*.kts}]
+# https://pinterest.github.io/ktlint/rules/configuration-ktlint/
+
+ktlint_code_style = android_studio
+
+#ktlint_standard = disabled # Disable all rulesg from the `standard` rule set provided by KtLint
+
+# Enable the rules from the `standard` rule set provided by KtLint
+
+# Disable the rules from the 'standard' rule set provided by KtLint
+ktlint_standard_discouraged-comment-location = disabled
+ktlint_standard_comment-wrapping = disabled
+ktlint_standard_property-naming = disabled
+ktlint_standard_class-naming = disabled
+
+# trailing_comma rules still have issue.
+# https://github.com/pinterest/ktlint/issues/1557
+ktlint_standard_trailing-comma-on-call-site = disabled
+ktlint_standard_trailing-comma-on-declaration-site  = disabled
+# https://github.com/pinterest/ktlint/issues/1733
+ktlint_standard_no-semi = disabled
+
+## `Set from...` on the right -> (`Predefined style`) -> `Kotlin style guide` (Kotlin plugin 1.2.20+).
+ij_kotlin_code_style_defaults = KOTLIN_OFFICIAL
+
+## open `Code Generation` tab
+# uncheck `Line comment at first column`;
+ij_kotlin_line_comment_at_first_column = false
+# select `Add a space at comment start`
+ij_kotlin_line_comment_add_space = true
+
+## open `Compose` tab
+# select `Enable Compose formatting for Modifiers`
+ij_kotlin_use_custom_formatting_for_modifiers = true
+
+## open `Imports tab`
+# select `Use single name import` (all of them);
+ij_kotlin_name_count_to_use_star_import = 2147483647
+ij_kotlin_name_count_to_use_star_import_for_members = 2147483647
+
+## open `Wrapping and Braces` tab
+# change `Keep Maximum Blank Lines` / `In declarations` & `In code` to 1
+ij_kotlin_keep_blank_lines_in_declarations = 1
+ij_kotlin_keep_blank_lines_in_code = 1
+# and `Before '}'` to 0
+ij_kotlin_keep_blank_lines_before_right_brace = 0
+
+## open `Wrapping and Braces` tab
+# uncheck `Function declaration parameters` / `Align when multiline`.
+ij_kotlin_align_multiline_parameters = false
+
+## open `Tabs and Indents` tab
+# change `Continuation indent` to the same value as `Indent` (4 by default)
+continuation_indent_size = 4
+ij_continuation_indent_size = 4
+
+# Other: Insert imports for nested classes -> false
+ij_kotlin_import_nested_classes = false
+# Import Layout: import all other imports, then import all alias imports
+ij_kotlin_imports_layout = *,^
+
+# When these values are set any values, disabled trailing_comma rules are activated
+#ij_kotlin_allow_trailing_comma = false
+#ij_kotlin_allow_trailing_comma_on_call_site = false
+
+# For Jetpack Compose & Tests
+ktlint_function_naming_ignore_when_annotated_with=Composable, Test
+
+[{*.xsl,*.xsd,*.xml}]
+ij_continuation_indent_size = 4
+ij_xml_use_custom_settings = true
+ij_xml_block_comment_at_first_column = true
+ij_xml_keep_indents_on_empty_lines = false
+ij_xml_line_comment_at_first_column = true
+
+[{*.yml,*.yaml}]
+indent_size = 2
+ij_yaml_keep_indents_on_empty_lines = false
+ij_yaml_keep_line_breaks = true
+
+[{*.md,*.markdown}]
+max_line_length = 99999
+trim_trailing_whitespace = false
+
+[*.json]
+indent_size = 2
