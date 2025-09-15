@@ -34,6 +34,7 @@ plugins {
     id "signing"
     id "com.android.library"
     id "kotlin-android"
+    id "org.jetbrains.kotlin.plugin.serialization" version "$kotlinVersion"
     id "com.google.devtools.ksp" version "2.2.10-2.0.2"
     id "org.jetbrains.kotlin.android"
     id "de.mannodermaus.android-junit5"
@@ -143,9 +144,6 @@ dependencies {
 
     // serialization
     implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:$project.kotlinxSerializationVersion"
-
-    // Gson
-    implementation "com.google.code.gson:gson:$project.gsonVersion"
 
     implementation "org.jetbrains.kotlin:kotlin-reflect:$project.kotlinVersion"
 }

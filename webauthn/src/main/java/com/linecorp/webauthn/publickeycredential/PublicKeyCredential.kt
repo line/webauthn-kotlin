@@ -17,7 +17,6 @@
 package com.linecorp.webauthn.publickeycredential
 
 import androidx.fragment.app.FragmentActivity
-import com.google.gson.Gson
 import com.linecorp.webauthn.authenticator.Authenticator
 import com.linecorp.webauthn.authenticator.AuthenticatorProvider
 import com.linecorp.webauthn.db.CredentialSourceStorage
@@ -51,6 +50,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
 
 /**
  * Abstract class representing a PublicKeyCredential for WebAuthn operations.
@@ -289,7 +290,7 @@ class PublicKeyCredential(
                     challenge = options.challenge,
                     origin = Fido2Util.getPackageFacetID(activity.applicationContext),
                 )
-            val clientDataJSON: ByteArray = Gson().toJson(collectedClientData).toByteArray()
+            val clientDataJSON: ByteArray = Json.encodeToString(collectedClientData).toByteArray()
             val clientDataHash: ByteArray =
                 MessageDigest.getInstance("SHA-256").digest(clientDataJSON)
 
@@ -352,7 +353,7 @@ class PublicKeyCredential(
             challenge = options.challenge,
             origin = Fido2Util.getPackageFacetID(activity.applicationContext),
         )
-        val clientDataJSON: ByteArray = Gson().toJson(collectedClientData).toByteArray()
+        val clientDataJSON: ByteArray = Json.encodeToString(collectedClientData).toByteArray()
         val clientDataHash: ByteArray =
             MessageDigest.getInstance("SHA-256").digest(clientDataJSON)
 
