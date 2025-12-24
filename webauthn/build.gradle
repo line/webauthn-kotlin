@@ -136,12 +136,6 @@ dependencies {
     // androidx biometric
     implementation "androidx.biometric:biometric:$project.biometricVersion"
 
-    // Room
-    implementation "androidx.room:room-runtime:$project.roomVersion"
-    ksp "androidx.room:room-compiler:$project.roomVersion"
-    implementation "androidx.room:room-ktx:$project.roomVersion"
-    androidTestImplementation "androidx.room:room-testing:$project.roomVersion"
-
     // serialization
     implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:$project.kotlinxSerializationVersion"
 
