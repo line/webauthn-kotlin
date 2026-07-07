@@ -73,6 +73,10 @@ internal class BiometricAuthenticationHandler(
                             ?: "Input your Fingerprint or FaceID to ensure it's you!",
                     )
                     .setNegativeButtonText(fido2PromptInfo?.negativeButtonText ?: "Cancel")
+                    // Without this, the prompt defaults to allowing Class 2 (WEAK)
+                    // biometrics on the no-CryptoObject path, even though this handler
+                    // gates support on BIOMETRIC_STRONG and the assertion claims UV.
+                    .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                     .build()
 
             val biometricPrompt =

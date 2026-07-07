@@ -108,8 +108,18 @@ internal class Authenticator(
         var keyCreated = false
         try {
             val credTypeAndPubKeyAlg: PublicKeyCredentialParams = fetchCredTypeAndPubKeyAlg(credTypesAndPubKeyAlgs)
-            checkCredentialWasNotRegistered(rpEntity.id, excludeCredDescriptorList)
             checkAuthenticationSupport(activity.applicationContext)
+            if (findExcludedCredential(rpEntity.id, excludeCredDescriptorList) != null) {
+                // WebAuthn L2 6.3.2 step 3: collect an authorization gesture BEFORE
+                // returning InvalidStateError, so a relying party cannot silently probe
+                // whether a given credential exists on this device. If the user declines,
+                // authenticate() maps the refusal to NotAllowedException as the spec
+                // requires.
+                authenticate(activity, authenticationHandler, fido2PromptInfo)
+                throw WebAuthnException.CoreException.InvalidStateException(
+                    message = "The credential is already registered."
+                )
+            }
             val keyAlias: String = credId
 
             val credentialSource = com.linecorp.webauthn.model.PublicKeyCredentialSource(
@@ -348,18 +358,19 @@ internal class Authenticator(
     }
 
     /**
-     * Checks if a credential is not registered.
+     * Finds a credential from the exclude list that is already registered on this device.
      *
      * @param rpId The relying party ID.
      * @param excludeCredDescriptorList The list of credentials to exclude.
-     * @return True if the credential is not registered, false otherwise.
+     * @return The first matching registered credential, or null when none of the excluded
+     * credentials exist.
      */
-    private suspend fun checkCredentialWasNotRegistered(
+    private suspend fun findExcludedCredential(
         rpId: String,
         excludeCredDescriptorList: List<PublicKeyCredentialDescriptor>?,
-    ) {
+    ): PublicKeyCredentialSource? {
         if (excludeCredDescriptorList.isNullOrEmpty()) {
-            return
+            return null
         }
         for (descriptor in excludeCredDescriptorList) {
             val credentialSource = try {
@@ -377,12 +388,10 @@ internal class Authenticator(
                 credentialSource.rpId == rpId &&
                 credentialSource.type == descriptor.type
             ) {
-                throw WebAuthnException.CoreException.InvalidStateException(
-                    message = "The credential is already registered."
-                )
+                return credentialSource
             }
         }
-        return
+        return null
     }
 
     /**
