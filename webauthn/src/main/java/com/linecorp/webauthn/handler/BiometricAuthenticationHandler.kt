@@ -34,12 +34,16 @@ import kotlinx.coroutines.withContext
 internal class BiometricAuthenticationHandler(
     private val authHandlerDispatcher: CoroutineDispatcher = Dispatchers.Main,
 ) : AuthenticationHandler {
-    override fun isSupported(context: Context): Boolean {
-        val biometricManager = BiometricManager.from(context)
-        return biometricManager.canAuthenticate(
-            BiometricManager.Authenticators.BIOMETRIC_STRONG
-        ) == BiometricManager.BIOMETRIC_SUCCESS
-    }
+    /**
+     * Returns the raw BiometricManager.canAuthenticate() status code for the
+     * BIOMETRIC_STRONG authenticator class required by this handler.
+     */
+    internal fun capabilityStatus(context: Context): Int = BiometricManager.from(context).canAuthenticate(
+        BiometricManager.Authenticators.BIOMETRIC_STRONG
+    )
+
+    override fun isSupported(context: Context): Boolean =
+        capabilityStatus(context) == BiometricManager.BIOMETRIC_SUCCESS
 
     override suspend fun authenticate(
         activity: FragmentActivity,

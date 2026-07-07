@@ -24,6 +24,8 @@ import com.linecorp.webauthn.authenticator.objectgenerator.Fido2ObjectGenerator
 import com.linecorp.webauthn.db.CredentialSourceStorage
 import com.linecorp.webauthn.exceptions.WebAuthnException
 import com.linecorp.webauthn.handler.AuthenticationHandler
+import com.linecorp.webauthn.handler.BiometricAuthenticationHandler
+import com.linecorp.webauthn.handler.DeviceCredentialAuthenticationHandler
 import com.linecorp.webauthn.model.AssertionObject
 import com.linecorp.webauthn.model.AttestationObject
 import com.linecorp.webauthn.model.AttestationStatementFormat
@@ -300,9 +302,19 @@ internal class Authenticator(
      */
     private fun checkAuthenticationSupport(context: Context) {
         if (!authenticationHandler.isSupported(context)) {
+            // Preserve the raw BiometricManager.canAuthenticate() status so callers can
+            // distinguish "nothing enrolled" from "no capable hardware" without a repro.
+            // Diagnostic lookup must never change the primary failure, hence runCatching.
+            val status: Int? = runCatching {
+                when (val handler = authenticationHandler) {
+                    is BiometricAuthenticationHandler -> handler.capabilityStatus(context)
+                    is DeviceCredentialAuthenticationHandler -> handler.capabilityStatus(context)
+                    else -> null
+                }
+            }.getOrNull()
             throw WebAuthnException.CoreException.ConstraintException(
                 message = "Authentication is not supported by a device."
-            )
+            ).apply { capabilityStatus = status }
         }
     }
 
@@ -421,12 +433,12 @@ internal class Authenticator(
             throw WebAuthnException.CoreException.NotAllowedException(
                 message = "Authentication failed",
                 cause = e
-            )
+            ).apply { errorCode = e.errorCode }
         } catch (e: AuthenticationHandler.AuthenticationErrorException) {
             throw WebAuthnException.CoreException.NotAllowedException(
                 message = "Authentication error is occurred.",
                 cause = e
-            )
+            ).apply { errorCode = e.errorCode }
         } catch (e: android.security.keystore.KeyPermanentlyInvalidatedException) {
             throw WebAuthnException.AuthenticationException.KeyPermanentlyInvalidatedException(
                 cause = e

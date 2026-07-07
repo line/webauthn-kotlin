@@ -16,11 +16,14 @@
 
 package com.linecorp.webauthn.publickeycredential
 
+import android.content.Context
 import androidx.fragment.app.FragmentActivity
 import com.linecorp.webauthn.authenticator.Authenticator
 import com.linecorp.webauthn.authenticator.AuthenticatorProvider
 import com.linecorp.webauthn.db.CredentialSourceStorage
 import com.linecorp.webauthn.exceptions.WebAuthnException
+import com.linecorp.webauthn.handler.BiometricAuthenticationHandler
+import com.linecorp.webauthn.handler.DeviceCredentialAuthenticationHandler
 import com.linecorp.webauthn.model.AttestationStatementFormat
 import com.linecorp.webauthn.model.AuthenticationMethod
 import com.linecorp.webauthn.model.AuthenticatorAssertionResponse
@@ -79,6 +82,29 @@ class PublicKeyCredential(
     }
 
     internal lateinit var authenticator: Authenticator
+
+    /**
+     * Returns the raw androidx BiometricManager.canAuthenticate() status code for the
+     * authentication method this instance was configured with, without starting any UI.
+     *
+     * Call this BEFORE offering FIDO registration/authentication so unsupported devices can
+     * be routed to an alternative instead of failing mid-flow with a ConstraintException:
+     * - BiometricManager.BIOMETRIC_SUCCESS (0): authentication is available.
+     * - BIOMETRIC_ERROR_NONE_ENROLLED (11): no (strong) biometric or credential enrolled -
+     *   guide the user to enrollment.
+     * - BIOMETRIC_ERROR_NO_HARDWARE (12): the device has no capable hardware - hide the
+     *   FIDO entry point or fall back per policy.
+     * - BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED (15): a security update is required first.
+     *
+     * @param context The application context.
+     * @return A BiometricManager status code.
+     */
+    fun canAuthenticate(context: Context): Int = when (authenticationMethod) {
+        AuthenticationMethod.Biometric ->
+            BiometricAuthenticationHandler(authenticationDispatcher).capabilityStatus(context)
+        AuthenticationMethod.DeviceCredential ->
+            DeviceCredentialAuthenticationHandler(authenticationDispatcher).capabilityStatus(context)
+    }
 
     /**
      * Initiates the registration process for a new credential.

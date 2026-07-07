@@ -38,17 +38,28 @@ internal class DeviceCredentialAuthenticationHandler(
 
     private val keyguardManagerWrapper = KeyguardManagerWrapper()
 
-    override fun isSupported(context: Context): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+    /**
+     * Returns the raw BiometricManager.canAuthenticate() status code for the authenticator
+     * classes required by this handler. On API < 30 the KeyguardManager check is mapped to
+     * BIOMETRIC_SUCCESS / BIOMETRIC_ERROR_NONE_ENROLLED (no secure lock screen configured).
+     */
+    internal fun capabilityStatus(context: Context): Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         // API level >= 30
-        val biometricManager = BiometricManager.from(context)
-        biometricManager.canAuthenticate(
+        BiometricManager.from(context).canAuthenticate(
             BiometricManager.Authenticators.BIOMETRIC_STRONG or
                 BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        ) == BiometricManager.BIOMETRIC_SUCCESS
+        )
     } else {
         // API level < 30
-        keyguardManagerWrapper.isSupported(context)
+        if (keyguardManagerWrapper.isSupported(context)) {
+            BiometricManager.BIOMETRIC_SUCCESS
+        } else {
+            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED
+        }
     }
+
+    override fun isSupported(context: Context): Boolean =
+        capabilityStatus(context) == BiometricManager.BIOMETRIC_SUCCESS
 
     override suspend fun authenticate(
         activity: FragmentActivity,
