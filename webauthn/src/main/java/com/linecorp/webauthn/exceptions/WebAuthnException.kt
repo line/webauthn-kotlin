@@ -90,8 +90,9 @@ sealed class WebAuthnException(override val message: String?, override val cause
      *
      * @param message The error message.
      * @param cause The cause of the issue during the deletion process.
-     * @param trigger The exception that triggered the deletion.
+     * @param trigger The exception that triggered the deletion - the original failure
+     * that the caller most likely wants to diagnose.
      */
-    class DeletionException(message: String, cause: Throwable? = null, trigger: Throwable? = null) :
+    class DeletionException(message: String, cause: Throwable? = null, val trigger: Throwable? = null) :
         WebAuthnException(message, cause)
 }

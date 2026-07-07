@@ -410,7 +410,9 @@ internal class Authenticator(
                         e
                     )
                 }
-                if (credSource != null && credSource.rpId == rpId) {
+                // Match type as well as rpId, mirroring the exclude-list check
+                // (WebAuthn L2: allowCredentials entries are matched by type and id).
+                if (credSource != null && credSource.rpId == rpId && credSource.type == descriptor.type) {
                     credOptions.add(credSource)
                 }
             }

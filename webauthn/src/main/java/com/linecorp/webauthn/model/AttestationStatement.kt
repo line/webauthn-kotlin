@@ -115,7 +115,8 @@ fun COSEAlgorithmIdentifier.getAlgorithmParameterSpec(): AlgorithmParameterSpec?
     COSEAlgorithmIdentifier.EdDSA -> null
     COSEAlgorithmIdentifier.ES256 -> ECGenParameterSpec("secp256r1")
     COSEAlgorithmIdentifier.ES384 -> ECGenParameterSpec("secp384r1")
-    COSEAlgorithmIdentifier.ES512 -> ECGenParameterSpec("secp512r1")
+    // ES512 uses the P-521 curve; "secp521r1" is the correct JCA name (not secp512r1).
+    COSEAlgorithmIdentifier.ES512 -> ECGenParameterSpec("secp521r1")
     COSEAlgorithmIdentifier.ES256K -> ECGenParameterSpec("secp256k1")
 }
 

@@ -30,18 +30,27 @@ import java.security.cert.X509Certificate
 
 class Fido2Util {
     companion object {
+        /**
+         * Computes the FIDO AppID/Facet identifier for this package from its FIRST signing
+         * certificate, matching the facet spec's convention. Note: packages signed by
+         * multiple signers or using key rotation may need a server-side allowlist of all
+         * facet ids derived from each certificate.
+         */
         fun getPackageFacetID(context: Context): String {
-            val cert: ByteArray = if (Build.VERSION.SDK_INT >= 33) {
+            val signingInfo = if (Build.VERSION.SDK_INT >= 33) {
                 context.packageManager.getPackageInfo(
                     context.packageName,
                     PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
-                ).signingInfo!!.apkContentsSigners[0].toByteArray()
+                ).signingInfo
             } else {
                 context.packageManager.getPackageInfo(
                     context.packageName,
                     PackageManager.GET_SIGNING_CERTIFICATES
-                ).signingInfo!!.apkContentsSigners[0].toByteArray()
-            }
+                ).signingInfo
+            } ?: throw WebAuthnException.UtilityException(
+                "Cannot obtain signing info for package ${context.packageName}."
+            )
+            val cert: ByteArray = signingInfo.apkContentsSigners[0].toByteArray()
             val input: InputStream = ByteArrayInputStream(cert)
             val cf = CertificateFactory.getInstance("X509")
             val certificate: X509Certificate = cf.generateCertificate(input) as X509Certificate

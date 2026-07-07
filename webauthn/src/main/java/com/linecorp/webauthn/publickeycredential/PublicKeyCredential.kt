@@ -46,6 +46,8 @@ import com.linecorp.webauthn.rp.RegistrationData
 import com.linecorp.webauthn.rp.RegistrationOptions
 import com.linecorp.webauthn.rp.RelyingParty
 import com.linecorp.webauthn.util.Fido2Util
+import com.linecorp.webauthn.util.SecureExecutionHelper
+import com.linecorp.webauthn.util.base64urlToByteArray
 import com.linecorp.webauthn.util.toBase64url
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
@@ -244,29 +246,23 @@ class PublicKeyCredential(
      * @throws WebAuthnException.CredSrcStorageException If there is an error loading credentials from the database.
      */
     suspend fun getAllAccounts(): List<com.linecorp.webauthn.model.PublicKeyCredentialSource> {
-        val result = mutableListOf<com.linecorp.webauthn.model.PublicKeyCredentialSource>()
-        for (authMethod in AuthenticationMethod.entries) {
-            for (fmt in AttestationStatementFormat.entries) {
-                val authenticator = authenticatorProvider.getAuthenticator(
-                    authenticationMethod = authMethod,
-                    attestationStatement = fmt,
-                    fido2PromptInfo = null,
-                )
-                val credentials: List<com.linecorp.webauthn.model.PublicKeyCredentialSource> = try {
-                    withContext(databaseDispatcher) {
-                        authenticator.db.loadAll()
-                    }
-                } catch (e: Exception) {
-                    throw WebAuthnException.CredSrcStorageException(
-                        "Failed to load credentials for authenticator type: ${authenticator.authType}",
-                        e
-                    )
-                }
-                result.addAll(credentials)
+        // loadAll() without an aaguid filter already returns every stored credential, so a
+        // single call is enough. Iterating authenticator types here would return each
+        // credential once per type (4x duplicates).
+        val authenticator = authenticatorProvider.getAuthenticator(
+            authenticationMethod = authenticationMethod,
+            attestationStatement = attestationStatement,
+            fido2PromptInfo = null,
+        )
+        return try {
+            withContext(databaseDispatcher) {
+                authenticator.db.loadAll()
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw WebAuthnException.CredSrcStorageException("Failed to load all credentials", e)
         }
-
-        return result
     }
 
     /**
@@ -275,24 +271,26 @@ class PublicKeyCredential(
      * @throws WebAuthnException.CredSrcStorageException If there is an error loading or deleting credentials from the database.
      */
     suspend fun deleteAllAccounts() {
-        for (authMethod in AuthenticationMethod.entries) {
-            for (fmt in AttestationStatementFormat.entries) {
-                val authenticator = authenticatorProvider.getAuthenticator(
-                    authenticationMethod = authMethod,
-                    attestationStatement = fmt,
-                    fido2PromptInfo = null,
-                )
+        val authenticator = authenticatorProvider.getAuthenticator(
+            authenticationMethod = authenticationMethod,
+            attestationStatement = attestationStatement,
+            fido2PromptInfo = null,
+        )
 
-                try {
-                    withContext(databaseDispatcher) {
-                        authenticator.db.loadAll().forEach { credential ->
-                            authenticator.db.delete(credential.id)
-                        }
-                    }
-                } catch (e: Exception) {
-                    throw WebAuthnException.CredSrcStorageException("Failed to load and delete all credentials", e)
+        try {
+            withContext(databaseDispatcher) {
+                authenticator.db.loadAll().forEach { credential ->
+                    // Delete the hardware-backed private key together with the DB row;
+                    // removing only the row would leave orphaned keys in the KeyStore.
+                    // The credential id is the KeyStore alias (see Authenticator).
+                    SecureExecutionHelper.deleteKey(credential.id)
+                    authenticator.db.delete(credential.id)
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw WebAuthnException.CredSrcStorageException("Failed to load and delete all credentials", e)
         }
     }
 
@@ -314,9 +312,22 @@ class PublicKeyCredential(
         fido2PromptInfo: Fido2PromptInfo? = null
     ): PublicKeyCredentialCreateResult {
         try {
-            if (options.user.id.length !in 1..64) {
+            // WebAuthn requires user.id to be 1..64 BYTES. The field carries the
+            // base64url encoding of those bytes (it is decoded as base64url at assertion
+            // time), so validate by decoding instead of counting string characters:
+            // a spec-valid 64-byte id encodes to ~86 characters and was wrongly rejected
+            // before, while a non-decodable id would only crash later during get().
+            val userIdBytes = try {
+                options.user.id.base64urlToByteArray()
+            } catch (e: WebAuthnException) {
                 throw WebAuthnException.CoreException.TypeException(
-                    "The length of the user id must be between 1 and 64."
+                    "user.id must be a base64url-encoded byte sequence.",
+                    e
+                )
+            }
+            if (userIdBytes.size !in 1..64) {
+                throw WebAuthnException.CoreException.TypeException(
+                    "The length of the user id must be between 1 and 64 bytes."
                 )
             }
 
