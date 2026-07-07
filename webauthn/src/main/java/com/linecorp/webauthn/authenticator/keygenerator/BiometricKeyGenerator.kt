@@ -26,6 +26,7 @@ import com.linecorp.webauthn.model.getKeyProperties
 import com.linecorp.webauthn.model.getSignaturePaddings
 import java.security.KeyPair
 import java.security.KeyPairGenerator
+import java.security.ProviderException
 
 class BiometricKeyGenerator : Fido2KeyGenerator() {
 
@@ -40,6 +41,11 @@ class BiometricKeyGenerator : Fido2KeyGenerator() {
             return try {
                 generateBiometricFido2Key(keyAlias, challenge, publicKeyAlgorithm, true, userAuthenticationRequired)
             } catch (e: StrongBoxUnavailableException) {
+                generateBiometricFido2Key(keyAlias, challenge, publicKeyAlgorithm, false, userAuthenticationRequired)
+            } catch (e: ProviderException) {
+                // Some vendor StrongBox KeyMint implementations reject unsupported parameter
+                // combinations with a plain ProviderException (e.g. KeyMint UNIMPLEMENTED, -100)
+                // instead of StrongBoxUnavailableException. Retry once on the TEE-backed path.
                 generateBiometricFido2Key(keyAlias, challenge, publicKeyAlgorithm, false, userAuthenticationRequired)
             }
         } else {

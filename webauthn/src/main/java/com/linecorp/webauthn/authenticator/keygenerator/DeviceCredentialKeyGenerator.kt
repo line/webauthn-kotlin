@@ -27,6 +27,7 @@ import com.linecorp.webauthn.model.getKeyProperties
 import com.linecorp.webauthn.model.getSignaturePaddings
 import java.security.KeyPair
 import java.security.KeyPairGenerator
+import java.security.ProviderException
 
 class DeviceCredentialKeyGenerator : Fido2KeyGenerator() {
 
@@ -47,6 +48,17 @@ class DeviceCredentialKeyGenerator : Fido2KeyGenerator() {
                     userAuthenticationRequired
                 )
             } catch (e: StrongBoxUnavailableException) {
+                generateDeviceCredentialFido2Key(
+                    keyAlias,
+                    challenge,
+                    publicKeyAlgorithm,
+                    false,
+                    userAuthenticationRequired
+                )
+            } catch (e: ProviderException) {
+                // Some vendor StrongBox KeyMint implementations reject unsupported parameter
+                // combinations with a plain ProviderException (e.g. KeyMint UNIMPLEMENTED, -100)
+                // instead of StrongBoxUnavailableException. Retry once on the TEE-backed path.
                 generateDeviceCredentialFido2Key(
                     keyAlias,
                     challenge,
