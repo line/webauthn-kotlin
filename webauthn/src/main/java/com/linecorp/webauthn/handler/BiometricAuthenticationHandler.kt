@@ -21,6 +21,7 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
 import com.linecorp.webauthn.model.Fido2PromptInfo
 import com.linecorp.webauthn.model.Fido2UserAuthResult
 import java.security.Signature
@@ -51,6 +52,13 @@ internal class BiometricAuthenticationHandler(
         fido2PromptInfo: Fido2PromptInfo?,
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult = withContext(authHandlerDispatcher) {
+        if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            throw AuthenticationHandler.AuthenticationErrorException(
+                message = "BiometricPrompt requires Activity to be in RESUMED state. " +
+                    "Current state: ${activity.lifecycle.currentState}"
+            )
+        }
+
         suspendCancellableCoroutine { continuation ->
             val promptInfo =
                 BiometricPrompt.PromptInfo.Builder()
@@ -66,7 +74,7 @@ internal class BiometricAuthenticationHandler(
             val biometricPrompt =
                 BiometricPrompt(
                     activity,
-                    ContextCompat.getMainExecutor(activity.applicationContext),
+                    ContextCompat.getMainExecutor(activity),
                     object : BiometricPrompt.AuthenticationCallback() {
                         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                             if (continuation.isActive) {
@@ -98,7 +106,13 @@ internal class BiometricAuthenticationHandler(
                 )
 
             continuation.invokeOnCancellation {
-                biometricPrompt.cancelAuthentication()
+                // invokeOnCancellation may be invoked from any thread, while
+                // cancelAuthentication() performs fragment operations that must run on
+                // the main thread. Post it to the main executor to avoid a crash when
+                // the calling scope is cancelled from a background thread.
+                ContextCompat.getMainExecutor(activity).execute {
+                    biometricPrompt.cancelAuthentication()
+                }
             }
 
             if (signatureProvider != null) {
