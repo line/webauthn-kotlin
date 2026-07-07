@@ -441,7 +441,10 @@ internal class Authenticator(
      * @throws WebAuthnException.CredSrcStorageException If there is an error deleting the credential from the database.
      */
     suspend fun cleanup(credId: String) {
-        val keyAlias = credId.toBase64url()
+        // The credId is already a base64url string and is used as the KeyStore alias as-is
+        // (see makeCredential/getAssertion: keyAlias = credId). Re-encoding it here would
+        // produce a different alias and silently skip deleting the actual key.
+        val keyAlias = credId
         SecureExecutionHelper.deleteKey(keyAlias)
         try {
             withContext(databaseDispatcher) {
