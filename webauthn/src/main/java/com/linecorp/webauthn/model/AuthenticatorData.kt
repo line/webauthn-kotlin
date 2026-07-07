@@ -19,6 +19,7 @@ package com.linecorp.webauthn.model
 import co.nstant.`in`.cbor.builder.AbstractBuilder
 import co.nstant.`in`.cbor.builder.MapBuilder
 import com.linecorp.webauthn.exceptions.WebAuthnException
+import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.security.interfaces.ECPublicKey
 
@@ -101,8 +102,8 @@ class EC2COSEKey(var kty: Int, var alg: Int, var crv: Int, var x: ByteArray, var
         kty = 2,
         alg = -7,
         crv = 1,
-        x = ecPublicKey.w.affineX.toByteArray(),
-        y = ecPublicKey.w.affineY.toByteArray(),
+        x = ecPublicKey.w.affineX.toFixedLengthByteArray(ecPublicKey.fieldSizeBytes()),
+        y = ecPublicKey.w.affineY.toFixedLengthByteArray(ecPublicKey.fieldSizeBytes()),
     )
 
     override fun <T : AbstractBuilder<*>?> toCBOR(builder: MapBuilder<T>): T = builder
@@ -112,6 +113,25 @@ class EC2COSEKey(var kty: Int, var alg: Int, var crv: Int, var x: ByteArray, var
         .put(-2, x)
         .put(-3, y)
         .end()
+}
+
+private fun ECPublicKey.fieldSizeBytes(): Int = (params.curve.field.fieldSize + 7) / 8
+
+/**
+ * Converts this integer to the SEC1 fixed-length unsigned big-endian encoding required for
+ * COSE EC2 coordinates (RFC 8152 section 13.1.1: exactly the field size in octets, leading
+ * zero octets preserved). BigInteger.toByteArray() returns the minimal two's-complement
+ * form instead: it prepends a 0x00 sign octet when the top bit is set and drops leading
+ * zero octets, both of which produce a spec-invalid credentialPublicKey.
+ */
+private fun BigInteger.toFixedLengthByteArray(length: Int): ByteArray {
+    val raw = toByteArray()
+    return when {
+        raw.size == length -> raw
+        raw.size == length + 1 && raw[0] == 0.toByte() -> raw.copyOfRange(1, raw.size)
+        raw.size < length -> ByteArray(length - raw.size) + raw
+        else -> throw WebAuthnException.EncodingException("EC coordinate is larger than the curve field size.")
+    }
 }
 
 enum class AuthenticatorDataFlags(val value: UByte) {

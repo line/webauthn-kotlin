@@ -29,7 +29,10 @@ interface CborSerializable {
     fun toCBOR(canonical: Boolean = true): ByteArray {
         try {
             val baos = ByteArrayOutputStream()
-            CborEncoder(baos).encode(toCBOR(CborBuilder().startMap()).build())
+            // addMap() produces a definite-length map. startMap() would produce an
+            // indefinite-length (chunked) map, which violates the CTAP2 canonical CBOR
+            // encoding form required for attestationObject and credentialPublicKey.
+            CborEncoder(baos).encode(toCBOR(CborBuilder().addMap()).build())
             return baos.toByteArray()
         } catch (e: Exception) {
             throw WebAuthnException.EncodingException("Cannot convert Attestation Object to CBOR.", e)

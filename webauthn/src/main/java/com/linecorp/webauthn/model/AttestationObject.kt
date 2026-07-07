@@ -38,7 +38,8 @@ data class AttestationObject(val authData: ByteArray, val fmt: String, val attSt
         if (fmt == AttestationStatementFormat.NONE.value) {
             builder.putMap("attStmt")
         } else {
-            attStmt.toCBOR(builder.startMap("attStmt"))
+            // putMap() keeps the nested attStmt map definite-length (CTAP2 canonical form).
+            attStmt.toCBOR(builder.putMap("attStmt"))
         }
         return builder.end()
     }
