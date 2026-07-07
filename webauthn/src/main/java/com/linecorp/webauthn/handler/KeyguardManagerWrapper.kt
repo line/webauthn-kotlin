@@ -86,17 +86,33 @@ class KeyguardManagerWrapper {
                 Log.d("AuthenticationActivity", "Starting activity with intent")
                 context.startActivity(activityIntent)
             }
+
+            /**
+             * Delivers the result exactly once and releases the callback reference so a
+             * re-created activity cannot deliver a second result (which would crash the
+             * already-resumed continuation) and the captured continuation is not leaked.
+             */
+            private fun deliverResult(result: Boolean, errorCode: Int?) {
+                callback?.invoke(result, errorCode)
+                callback = null
+            }
         }
 
         override fun onCreate(savedInstanceState: Bundle?) {
             super.onCreate(savedInstanceState)
+            if (savedInstanceState != null) {
+                // Re-created (configuration change / process restore): the confirmation
+                // launched from the original instance is still in flight; do not fire a
+                // second one.
+                return
+            }
             val intent = intent.getParcelableExtra<Intent>("fido2_auth_intent")
             if (intent != null) {
                 Log.d("AuthenticationActivity", "Starting activity for result")
                 startActivityForResult(intent, REQUEST_CODE_CONFIRM_DEVICE_CREDENTIAL)
             } else {
                 Log.d("AuthenticationActivity", "Intent is null, finishing activity")
-                callback?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
+                deliverResult(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
                 finish()
             }
         }
@@ -107,16 +123,16 @@ class KeyguardManagerWrapper {
                 Log.d("AuthenticationActivity", "Received result: $resultCode")
                 when (resultCode) {
                     RESULT_OK -> {
-                        callback?.invoke(true, null)
+                        deliverResult(true, null)
                         Log.d("AuthenticationActivity", "Authentication succeeded")
                     }
                     RESULT_CANCELED -> {
                         Log.d("AuthenticationActivity", "Authentication canceled")
-                        callback?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED)
+                        deliverResult(false, BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED)
                     }
                     else -> {
                         Log.d("AuthenticationActivity", "Authentication failed")
-                        callback?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
+                        deliverResult(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
                     }
                 }
             }

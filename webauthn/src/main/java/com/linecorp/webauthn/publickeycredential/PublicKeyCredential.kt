@@ -48,6 +48,7 @@ import com.linecorp.webauthn.rp.RelyingParty
 import com.linecorp.webauthn.util.Fido2Util
 import com.linecorp.webauthn.util.toBase64url
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -127,6 +128,8 @@ class PublicKeyCredential(
                 withContext(relyingPartyDispatcher) {
                     rpClient.getRegistrationData(options)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 throw WebAuthnException.RpException(
                     "Error occurred while getting registration data from rp: $e",
@@ -153,6 +156,11 @@ class PublicKeyCredential(
                 withContext(relyingPartyDispatcher) {
                     rpClient.verifyRegistration(createResult)
                 }
+            } catch (e: CancellationException) {
+                // Roll back the locally stored credential (cleanup itself is
+                // NonCancellable), then let cancellation propagate.
+                runCatching { authenticator.cleanup(createResult.id) }
+                throw e
             } catch (e: Throwable) {
                 val rpException = WebAuthnException.RpException(
                     "Error occurred while verifying registration data from rp: $e",
@@ -170,7 +178,7 @@ class PublicKeyCredential(
                 }
                 throw rpException
             }
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     /**
@@ -193,6 +201,8 @@ class PublicKeyCredential(
                 withContext(relyingPartyDispatcher) {
                     rpClient.getAuthenticationData(options)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 throw WebAuthnException.RpException(
                     "Error occurred while getting authentication data from rp: $e",
@@ -216,13 +226,15 @@ class PublicKeyCredential(
                 withContext(relyingPartyDispatcher) {
                     rpClient.verifyAuthentication(getResult)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 throw WebAuthnException.RpException(
                     "Error occurred while verifying authentication data from rp: $e",
                     e
                 )
             }
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     /**
@@ -345,6 +357,8 @@ class PublicKeyCredential(
                 ),
                 clientExtensionsOutput = options.extensions?.processClientExtensionsOutput(),
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             if (e is WebAuthnException) {
                 throw e
@@ -374,40 +388,55 @@ class PublicKeyCredential(
         options: PublicKeyCredentialRequestOptions,
         fido2PromptInfo: Fido2PromptInfo? = null
     ): PublicKeyCredentialGetResult {
-        val collectedClientData = CollectedClientData(
-            type = "webauthn.get",
-            challenge = options.challenge,
-            origin = Fido2Util.getPackageFacetID(activity.applicationContext),
-        )
-        val clientDataJSON: ByteArray = Json.encodeToString(collectedClientData).toByteArray()
-        val clientDataHash: ByteArray =
-            MessageDigest.getInstance("SHA-256").digest(clientDataJSON)
+        try {
+            val collectedClientData = CollectedClientData(
+                type = "webauthn.get",
+                challenge = options.challenge,
+                origin = Fido2Util.getPackageFacetID(activity.applicationContext),
+            )
+            val clientDataJSON: ByteArray = Json.encodeToString(collectedClientData).toByteArray()
+            val clientDataHash: ByteArray =
+                MessageDigest.getInstance("SHA-256").digest(clientDataJSON)
 
-        authenticator = authenticatorProvider.getAuthenticator(
-            authenticationMethod = authenticationMethod,
-            attestationStatement = attestationStatement,
-            fido2PromptInfo = fido2PromptInfo
-        )
+            authenticator = authenticatorProvider.getAuthenticator(
+                authenticationMethod = authenticationMethod,
+                attestationStatement = attestationStatement,
+                fido2PromptInfo = fido2PromptInfo
+            )
 
-        val authGetAssertionResult: AuthenticatorGetAssertionResult = authenticator.getAssertion(
-            activity = activity,
-            rpId = options.rpId,
-            hash = clientDataHash,
-            allowCredDescriptorList = options.allowCredentials,
-            extensions = options.extensions?.processAuthenticatorExtensionsInput(),
-        ).getOrThrow()
+            val authGetAssertionResult: AuthenticatorGetAssertionResult = authenticator.getAssertion(
+                activity = activity,
+                rpId = options.rpId,
+                hash = clientDataHash,
+                allowCredDescriptorList = options.allowCredentials,
+                extensions = options.extensions?.processAuthenticatorExtensionsInput(),
+            ).getOrThrow()
 
-        return PublicKeyCredentialGetResult(
-            id = authGetAssertionResult.credentialId.toBase64url(),
-            authenticatorAssertionResponse =
-            com.linecorp.webauthn.model.AuthenticatorAssertionResponse(
-                clientDataJSON = clientDataJSON,
-                authenticatorData = authGetAssertionResult.authenticatorData,
-                signature = authGetAssertionResult.signature,
-                userHandle = authGetAssertionResult.userHandle,
-            ),
-            clientExtensionsOutput = options.extensions?.processClientExtensionsOutput(),
-        )
+            return PublicKeyCredentialGetResult(
+                id = authGetAssertionResult.credentialId.toBase64url(),
+                authenticatorAssertionResponse =
+                com.linecorp.webauthn.model.AuthenticatorAssertionResponse(
+                    clientDataJSON = clientDataJSON,
+                    authenticatorData = authGetAssertionResult.authenticatorData,
+                    signature = authGetAssertionResult.signature,
+                    userHandle = authGetAssertionResult.userHandle,
+                ),
+                clientExtensionsOutput = options.extensions?.processClientExtensionsOutput(),
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Mirror publicKeyCredentialCreate: normalize everything to WebAuthnException
+            // so get() never surfaces raw platform exceptions.
+            if (e is WebAuthnException) {
+                throw e
+            } else {
+                throw WebAuthnException.UnknownException(
+                    "Error occurred while getting public key credential: $e",
+                    e
+                )
+            }
+        }
     }
 
     /**

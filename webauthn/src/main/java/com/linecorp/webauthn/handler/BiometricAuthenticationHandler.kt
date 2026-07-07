@@ -82,13 +82,22 @@ internal class BiometricAuthenticationHandler(
                     object : BiometricPrompt.AuthenticationCallback() {
                         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                             if (continuation.isActive) {
-                                continuation.resumeWith(
-                                    Result.success(
-                                        Fido2UserAuthResult(
-                                            signature = result.cryptoObject?.signature
+                                val signature = result.cryptoObject?.signature
+                                if (signatureProvider != null && signature == null) {
+                                    // A CryptoObject was requested but none came back:
+                                    // fail loudly here instead of crashing later on a
+                                    // null signature during assertion generation.
+                                    continuation.resumeWithException(
+                                        AuthenticationHandler.AuthenticationErrorException(
+                                            message = "Authentication succeeded but no signature " +
+                                                "was returned from the CryptoObject."
                                         )
                                     )
-                                )
+                                } else {
+                                    continuation.resumeWith(
+                                        Result.success(Fido2UserAuthResult(signature = signature))
+                                    )
+                                }
                             }
                         }
 

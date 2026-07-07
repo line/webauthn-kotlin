@@ -105,13 +105,22 @@ internal class DeviceCredentialAuthenticationHandler(
                     object : BiometricPrompt.AuthenticationCallback() {
                         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                             if (continuation.isActive) {
-                                continuation.resumeWith(
-                                    Result.success(
-                                        Fido2UserAuthResult(
-                                            signature = result.cryptoObject?.signature
+                                val signature = result.cryptoObject?.signature
+                                if (signatureProvider != null && signature == null) {
+                                    // A CryptoObject was requested but none came back:
+                                    // fail loudly here instead of crashing later on a
+                                    // null signature during assertion generation.
+                                    continuation.resumeWithException(
+                                        AuthenticationHandler.AuthenticationErrorException(
+                                            message = "Authentication succeeded but no signature " +
+                                                "was returned from the CryptoObject."
                                         )
                                     )
-                                )
+                                } else {
+                                    continuation.resumeWith(
+                                        Result.success(Fido2UserAuthResult(signature = signature))
+                                    )
+                                }
                             }
                         }
 
@@ -156,6 +165,16 @@ internal class DeviceCredentialAuthenticationHandler(
         fido2PromptInfo: Fido2PromptInfo?,
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult = withContext(authHandlerDispatcher) {
+        if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            // Mirrors the BiometricPrompt path: launching the confirm-device-credential
+            // activity from the background either fails silently (suspending the caller
+            // forever) or is blocked by background-activity-start restrictions.
+            throw AuthenticationHandler.AuthenticationErrorException(
+                message = "KeyguardManager authentication requires Activity to be in RESUMED state. " +
+                    "Current state: ${activity.lifecycle.currentState}"
+            )
+        }
+
         try {
             keyguardManagerWrapper.authenticate(activity, fido2PromptInfo)
             val signature = signatureProvider?.invoke()

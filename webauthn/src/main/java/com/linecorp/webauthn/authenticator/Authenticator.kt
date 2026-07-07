@@ -51,8 +51,10 @@ import com.linecorp.webauthn.util.base64urlToByteArray
 import com.linecorp.webauthn.util.toBase64url
 import java.security.PrivateKey
 import java.security.Signature
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
@@ -64,6 +66,7 @@ internal class Authenticator(
     val authType: AuthenticatorType,
     var fido2PromptInfo: Fido2PromptInfo? = null,
     val databaseDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    val cryptoDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
 
     /**
@@ -99,7 +102,10 @@ internal class Authenticator(
         excludeCredDescriptorList: List<PublicKeyCredentialDescriptor>?,
         extensions: AuthenticatorExtensionsInput?,
     ): Result<AuthenticatorMakeCredentialResult> {
-        val (credIdBytes: ByteArray, credId: String) = generateUniqueCredId()
+        // KeyStore access and key generation are blocking binder/crypto calls; keep them
+        // off the caller's dispatcher (typically Main) to avoid ANRs.
+        val (credIdBytes: ByteArray, credId: String) = withContext(cryptoDispatcher) { generateUniqueCredId() }
+        var keyCreated = false
         try {
             val credTypeAndPubKeyAlg: PublicKeyCredentialParams = fetchCredTypeAndPubKeyAlg(credTypesAndPubKeyAlgs)
             checkCredentialWasNotRegistered(rpEntity.id, excludeCredDescriptorList)
@@ -116,12 +122,15 @@ internal class Authenticator(
 
             val fmt = authType.getAttestationStatementFormat()
             val challenge = if (fmt != AttestationStatementFormat.NONE) hash else null
-            val keyPair = fido2KeyGenerator.generateFido2Key(
-                keyAlias = keyAlias,
-                challenge = challenge,
-                publicKeyAlgorithm = credTypeAndPubKeyAlg.alg,
-                isStrongBoxBacked = isStrongBoxSupported(activity.applicationContext),
-            )
+            val keyPair = withContext(cryptoDispatcher) {
+                fido2KeyGenerator.generateFido2Key(
+                    keyAlias = keyAlias,
+                    challenge = challenge,
+                    publicKeyAlgorithm = credTypeAndPubKeyAlg.alg,
+                    isStrongBoxBacked = isStrongBoxSupported(activity.applicationContext),
+                )
+            }
+            keyCreated = true
 
             val fido2UserAuthResult = if (fmt != AttestationStatementFormat.NONE) {
                 val signatureAlgorithm = credTypeAndPubKeyAlg.alg.getSignatureAlgorithmName()
@@ -132,15 +141,17 @@ internal class Authenticator(
                 authenticate(activity, authenticationHandler, fido2PromptInfo)
             }
 
-            val attestationObject: AttestationObject = fido2ObjectGenerator.createAttestationObject(
-                hash = hash,
-                rpId = rpEntity.id,
-                aaguid = authType.aaguidBytes(),
-                credId = credId,
-                signCount = 0u,
-                extensions = AuthenticatorExtensionsOutput.getAuthenticatorExtensionResult(extensions),
-                signature = fido2UserAuthResult.signature,
-            )
+            val attestationObject: AttestationObject = withContext(cryptoDispatcher) {
+                fido2ObjectGenerator.createAttestationObject(
+                    hash = hash,
+                    rpId = rpEntity.id,
+                    aaguid = authType.aaguidBytes(),
+                    credId = credId,
+                    signCount = 0u,
+                    extensions = AuthenticatorExtensionsOutput.getAuthenticatorExtensionResult(extensions),
+                    signature = fido2UserAuthResult.signature,
+                )
+            }
 
             storeCredentialSourceIntoDB(credentialSource)
 
@@ -150,8 +161,16 @@ internal class Authenticator(
                     attestationObject = attestationObject.toCBOR(),
                 )
             )
+        } catch (e: CancellationException) {
+            // Roll back the half-created credential, then let cancellation propagate
+            // instead of being wrapped into a WebAuthnException, so structured
+            // concurrency keeps working for the caller.
+            if (keyCreated) {
+                runCatching { cleanup(credId) }
+            }
+            throw e
         } catch (e: Throwable) {
-            return handleMakeCredentialException(e, credId)
+            return handleMakeCredentialException(e, credId, keyCreated)
         }
     }
 
@@ -185,10 +204,15 @@ internal class Authenticator(
 
             checkAuthenticationSupport(activity.applicationContext)
 
-            val key = SecureExecutionHelper.getKey(keyAlias) ?: throw WebAuthnException.KeyNotFoundException(
+            // KeyStore access is a blocking binder call; keep it off the caller's dispatcher.
+            val key = withContext(cryptoDispatcher) {
+                SecureExecutionHelper.getKey(keyAlias)
+            } ?: throw WebAuthnException.KeyNotFoundException(
                 message = "Cannot get a key from device."
             )
-            val signatureAlgorithm = SecureExecutionHelper.getX509Certificate(keyAlias).sigAlgName
+            val signatureAlgorithm = withContext(cryptoDispatcher) {
+                SecureExecutionHelper.getX509Certificate(keyAlias).sigAlgName
+            }
             val fido2UserAuthResult = authenticate(activity, authenticationHandler, fido2PromptInfo) {
                 Signature.getInstance(signatureAlgorithm).apply { initSign(key as PrivateKey) }
             }
@@ -217,7 +241,7 @@ internal class Authenticator(
                 )
             }
 
-            val assertionObject: AssertionObject =
+            val assertionObject: AssertionObject = withContext(cryptoDispatcher) {
                 fido2ObjectGenerator.createAssertionObject(
                     hash = hash,
                     rpId = rpId,
@@ -225,6 +249,7 @@ internal class Authenticator(
                     signature = fido2UserAuthResult.signature!!,
                     extensions = processedExtensions
                 )
+            }
 
             return Result.success(
                 AuthenticatorGetAssertionResult(
@@ -234,6 +259,10 @@ internal class Authenticator(
                     userHandle = selectedCred.userHandle?.base64urlToByteArray(),
                 )
             )
+        } catch (e: CancellationException) {
+            // Let cancellation propagate for structured concurrency instead of
+            // converting it into a WebAuthnException failure result.
+            throw e
         } catch (e: Exception) {
             val authenticatorException = if (e is WebAuthnException) {
                 e
@@ -453,17 +482,24 @@ internal class Authenticator(
      * @throws WebAuthnException.CredSrcStorageException If there is an error deleting the credential from the database.
      */
     suspend fun cleanup(credId: String) {
-        // The credId is already a base64url string and is used as the KeyStore alias as-is
-        // (see makeCredential/getAssertion: keyAlias = credId). Re-encoding it here would
-        // produce a different alias and silently skip deleting the actual key.
-        val keyAlias = credId
-        SecureExecutionHelper.deleteKey(keyAlias)
-        try {
-            withContext(databaseDispatcher) {
-                db.delete(credId = credId)
+        // NonCancellable: this rollback must run to completion even when the calling
+        // coroutine is already cancelled, otherwise the key and the DB row can get out
+        // of sync (key deleted but row left behind, or vice versa).
+        withContext(NonCancellable) {
+            // The credId is already a base64url string and is used as the KeyStore alias
+            // as-is (see makeCredential/getAssertion: keyAlias = credId). Re-encoding it
+            // here would produce a different alias and silently skip deleting the key.
+            val keyAlias = credId
+            withContext(cryptoDispatcher) {
+                SecureExecutionHelper.deleteKey(keyAlias)
             }
-        } catch (e: Exception) {
-            throw WebAuthnException.CredSrcStorageException("Failed to delete credential for credId: $credId", e)
+            try {
+                withContext(databaseDispatcher) {
+                    db.delete(credId = credId)
+                }
+            } catch (e: Exception) {
+                throw WebAuthnException.CredSrcStorageException("Failed to delete credential for credId: $credId", e)
+            }
         }
     }
 
@@ -514,11 +550,13 @@ internal class Authenticator(
      *
      * @param e The exception that occurred.
      * @param credId The credential ID related to the exception.
+     * @param keyCreated True when a key pair was already generated for this credential.
      * @return A failure result containing the exception.
      */
     private suspend fun handleMakeCredentialException(
         e: Throwable,
-        credId: String
+        credId: String,
+        keyCreated: Boolean,
     ): Result<AuthenticatorMakeCredentialResult> {
         val authenticatorException = if (e is WebAuthnException) {
             e
@@ -527,6 +565,13 @@ internal class Authenticator(
                 message = "An unknown error occurred.",
                 cause = e
             )
+        }
+
+        if (!keyCreated) {
+            // Nothing was persisted yet: skip cleanup so a pre-flight failure (unsupported
+            // device, duplicate credential, ...) is not masked by a DeletionException from
+            // deleting state that never existed.
+            return Result.failure(authenticatorException)
         }
 
         return try {
