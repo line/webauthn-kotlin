@@ -43,9 +43,26 @@ sealed class WebAuthnException(override val message: String?, override val cause
             cause: Throwable? = null
         ) : CoreException(message, cause) {
             /**
-             * The androidx.biometric BiometricPrompt error code that caused this failure
-             * (e.g. ERROR_USER_CANCELED = 10, ERROR_LOCKOUT = 7), or null when unavailable.
-             * Use this instead of matching the localized error message.
+             * The androidx.biometric BiometricPrompt error code delivered by
+             * AuthenticationCallback.onAuthenticationError(errorCode, errString),
+             * or null when unavailable. Use this instead of matching the localized
+             * error message (errString), which varies by locale and vendor.
+             *
+             * Constants (androidx.biometric.BiometricPrompt, verified against 1.1.0):
+             * -  1 ERROR_HW_UNAVAILABLE          hardware temporarily unavailable (retry later)
+             * -  2 ERROR_UNABLE_TO_PROCESS       sensor could not process the input (retryable)
+             * -  3 ERROR_TIMEOUT                 prompt timed out with no input
+             * -  4 ERROR_NO_SPACE                not enough device storage
+             * -  5 ERROR_CANCELED                canceled by the system/app (e.g. backgrounded)
+             * -  7 ERROR_LOCKOUT                 too many attempts, temporary lockout
+             * -  8 ERROR_VENDOR                  vendor-specific error
+             * -  9 ERROR_LOCKOUT_PERMANENT       locked out until device credential unlock
+             * - 10 ERROR_USER_CANCELED           user dismissed the prompt
+             * - 11 ERROR_NO_BIOMETRICS           no biometrics enrolled
+             * - 12 ERROR_HW_NOT_PRESENT          no biometric hardware
+             * - 13 ERROR_NEGATIVE_BUTTON         user tapped the negative (cancel) button
+             * - 14 ERROR_NO_DEVICE_CREDENTIAL    no PIN/pattern/password configured
+             * - 15 ERROR_SECURITY_UPDATE_REQUIRED sensor disabled pending a security update
              */
             var errorCode: Int? = null
                 internal set
