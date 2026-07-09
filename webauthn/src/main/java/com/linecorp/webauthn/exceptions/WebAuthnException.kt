@@ -128,7 +128,14 @@ sealed class WebAuthnException(override val message: String?, override val cause
      * that the caller most likely wants to diagnose.
      */
     class DeletionException(message: String, cause: Throwable? = null, val trigger: Throwable? = null) :
-        WebAuthnException(message, cause)
+        WebAuthnException(message, cause) {
+        init {
+            // Attach the trigger as a suppressed exception so plain stack-trace logging
+            // automatically prints the original failure ("Suppressed: ...") alongside
+            // the deletion failure, without requiring callers to read the property.
+            trigger?.let { addSuppressed(it) }
+        }
+    }
 }
 
 /**
