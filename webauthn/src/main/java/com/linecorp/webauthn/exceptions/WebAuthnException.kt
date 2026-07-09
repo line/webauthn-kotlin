@@ -16,6 +16,7 @@
 
 package com.linecorp.webauthn.exceptions
 
+import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 
 sealed class WebAuthnException(override val message: String?, override val cause: Throwable? = null) :
@@ -34,6 +35,14 @@ sealed class WebAuthnException(override val message: String?, override val cause
              */
             var capabilityStatus: Int? = null
                 internal set
+
+            /**
+             * Human-readable constant name for [capabilityStatus]
+             * (e.g. 11 -> "BIOMETRIC_ERROR_NONE_ENROLLED"), or null when unavailable.
+             * Intended for logs and telemetry.
+             */
+            val capabilityStatusName: String?
+                get() = capabilityStatus?.let { biometricManagerStatusName(it) }
         }
         class InvalidStateException(message: String? = "The object is in an invalid state.", cause: Throwable? = null) :
             CoreException(message, cause)
@@ -66,6 +75,14 @@ sealed class WebAuthnException(override val message: String?, override val cause
              */
             var errorCode: Int? = null
                 internal set
+
+            /**
+             * Human-readable constant name for [errorCode]
+             * (e.g. 10 -> "ERROR_USER_CANCELED"), or null when unavailable.
+             * Intended for logs and telemetry.
+             */
+            val errorCodeName: String?
+                get() = errorCode?.let { biometricPromptErrorName(it) }
 
             /**
              * True when this failure is a user or system cancellation of the authentication
@@ -112,4 +129,43 @@ sealed class WebAuthnException(override val message: String?, override val cause
      */
     class DeletionException(message: String, cause: Throwable? = null, val trigger: Throwable? = null) :
         WebAuthnException(message, cause)
+}
+
+/**
+ * Maps an androidx.biometric.BiometricPrompt ERROR_* code to its constant name
+ * (verified against biometric 1.1.0). Used for logs so services can act on the
+ * failure without a lookup table.
+ */
+internal fun biometricPromptErrorName(code: Int): String = when (code) {
+    BiometricPrompt.ERROR_HW_UNAVAILABLE -> "ERROR_HW_UNAVAILABLE"
+    BiometricPrompt.ERROR_UNABLE_TO_PROCESS -> "ERROR_UNABLE_TO_PROCESS"
+    BiometricPrompt.ERROR_TIMEOUT -> "ERROR_TIMEOUT"
+    BiometricPrompt.ERROR_NO_SPACE -> "ERROR_NO_SPACE"
+    BiometricPrompt.ERROR_CANCELED -> "ERROR_CANCELED"
+    BiometricPrompt.ERROR_LOCKOUT -> "ERROR_LOCKOUT"
+    BiometricPrompt.ERROR_VENDOR -> "ERROR_VENDOR"
+    BiometricPrompt.ERROR_LOCKOUT_PERMANENT -> "ERROR_LOCKOUT_PERMANENT"
+    BiometricPrompt.ERROR_USER_CANCELED -> "ERROR_USER_CANCELED"
+    BiometricPrompt.ERROR_NO_BIOMETRICS -> "ERROR_NO_BIOMETRICS"
+    BiometricPrompt.ERROR_HW_NOT_PRESENT -> "ERROR_HW_NOT_PRESENT"
+    BiometricPrompt.ERROR_NEGATIVE_BUTTON -> "ERROR_NEGATIVE_BUTTON"
+    BiometricPrompt.ERROR_NO_DEVICE_CREDENTIAL -> "ERROR_NO_DEVICE_CREDENTIAL"
+    BiometricPrompt.ERROR_SECURITY_UPDATE_REQUIRED -> "ERROR_SECURITY_UPDATE_REQUIRED"
+    else -> "UNKNOWN_ERROR"
+}
+
+/**
+ * Maps an androidx.biometric.BiometricManager.canAuthenticate() status code to its
+ * constant name (verified against biometric 1.1.0). Note this is a different constant
+ * set from BiometricPrompt ERROR_* codes.
+ */
+internal fun biometricManagerStatusName(code: Int): String = when (code) {
+    BiometricManager.BIOMETRIC_SUCCESS -> "BIOMETRIC_SUCCESS"
+    BiometricManager.BIOMETRIC_STATUS_UNKNOWN -> "BIOMETRIC_STATUS_UNKNOWN"
+    BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED -> "BIOMETRIC_ERROR_UNSUPPORTED"
+    BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> "BIOMETRIC_ERROR_HW_UNAVAILABLE"
+    BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> "BIOMETRIC_ERROR_NONE_ENROLLED"
+    BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> "BIOMETRIC_ERROR_NO_HARDWARE"
+    BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED -> "BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED"
+    else -> "UNKNOWN_STATUS"
 }

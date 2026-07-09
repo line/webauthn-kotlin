@@ -23,6 +23,8 @@ import com.linecorp.webauthn.authenticator.keygenerator.Fido2KeyGenerator
 import com.linecorp.webauthn.authenticator.objectgenerator.Fido2ObjectGenerator
 import com.linecorp.webauthn.db.CredentialSourceStorage
 import com.linecorp.webauthn.exceptions.WebAuthnException
+import com.linecorp.webauthn.exceptions.biometricManagerStatusName
+import com.linecorp.webauthn.exceptions.biometricPromptErrorName
 import com.linecorp.webauthn.handler.AuthenticationHandler
 import com.linecorp.webauthn.handler.BiometricAuthenticationHandler
 import com.linecorp.webauthn.handler.DeviceCredentialAuthenticationHandler
@@ -351,8 +353,9 @@ internal class Authenticator(
                     else -> null
                 }
             }.getOrNull()
+            val detail = status?.let { " (capabilityStatus=$it ${biometricManagerStatusName(it)})" } ?: ""
             throw WebAuthnException.CoreException.ConstraintException(
-                message = "Authentication is not supported by a device."
+                message = "Authentication is not supported by a device.$detail"
             ).apply { capabilityStatus = status }
         }
     }
@@ -470,13 +473,17 @@ internal class Authenticator(
         try {
             return authenticationHandler.authenticate(activity, fido2PromptInfo, signatureProvider)
         } catch (e: AuthenticationHandler.AuthenticationFailedException) {
+            // Keep the base message stable for log grouping; append code + constant name
+            // so services can act on the exact reason without a lookup table.
+            val detail = e.errorCode?.let { " (errorCode=$it ${biometricPromptErrorName(it)})" } ?: ""
             throw WebAuthnException.CoreException.NotAllowedException(
-                message = "Authentication failed",
+                message = "Authentication failed$detail",
                 cause = e
             ).apply { errorCode = e.errorCode }
         } catch (e: AuthenticationHandler.AuthenticationErrorException) {
+            val detail = e.errorCode?.let { " (errorCode=$it ${biometricPromptErrorName(it)})" } ?: ""
             throw WebAuthnException.CoreException.NotAllowedException(
-                message = "Authentication error is occurred.",
+                message = "Authentication error is occurred.$detail",
                 cause = e
             ).apply { errorCode = e.errorCode }
         } catch (e: android.security.keystore.KeyPermanentlyInvalidatedException) {
