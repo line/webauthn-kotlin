@@ -51,7 +51,13 @@ import java.security.KeyPairGenerator
 import java.security.Signature
 import java.security.cert.X509Certificate
 import kotlin.reflect.KClass
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions
@@ -257,6 +263,59 @@ class AuthenticatorTest {
                 "makeCredential throws $e"
             )
         }
+    }
+
+    @Test
+    fun `cleanup runs when the job is cancelled while the key is being generated`(): Unit = runBlocking {
+        // Regression guard: a key committed to the KeyStore during a cancelled keygen must
+        // still be deleted. cryptoDispatcher must differ from the caller's context so
+        // withContext's prompt-cancellation guarantee applies.
+        val localAuthenticator = Authenticator(
+            db = mockFido2Database,
+            authenticationHandler = mockAuthenticationHandler,
+            fido2KeyGenerator = mockKeyGenerator,
+            fido2ObjectGenerator = mockObjectGenerator,
+            authType = AuthenticatorType.BiometricAndroidKey,
+            cryptoDispatcher = Dispatchers.Default,
+        )
+
+        val deletedAlias = CompletableDeferred<String>()
+        every { SecureExecutionHelper.deleteKey(any()) } answers {
+            deletedAlias.complete(firstArg())
+            Unit
+        }
+
+        lateinit var job: Job
+        // The key generator "creates" the key and then cancels the calling job, so that
+        // withContext resumes the caller with CancellationException even though the key
+        // was committed. With the flag set inside the block, cleanup must still run.
+        every { mockKeyGenerator.generateFido2Key(any(), any(), any(), any()) } answers {
+            job.cancel()
+            dummyKeyPair
+        }
+
+        job = launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
+            try {
+                localAuthenticator.makeCredential(
+                    mockActivity,
+                    dummyHash,
+                    dummyRpEntity,
+                    dummyUserEntity,
+                    listOf(es256CredParams),
+                    null,
+                    null
+                )
+            } catch (_: Exception) {
+                // CancellationException is expected; swallow so the test can assert cleanup.
+            }
+        }
+        job.start()
+        job.join()
+
+        assertThat(withTimeoutOrNull(2000) { deletedAlias.await() }).isNotNull()
+
+        // Restore the shared stub for subsequent tests.
+        every { mockKeyGenerator.generateFido2Key(any(), any(), any(), any()) } returns dummyKeyPair
     }
 
     @Test

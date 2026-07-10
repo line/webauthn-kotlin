@@ -140,9 +140,16 @@ internal class Authenticator(
                     challenge = challenge,
                     publicKeyAlgorithm = credTypeAndPubKeyAlg.alg,
                     isStrongBoxBacked = isStrongBoxSupported(activity.applicationContext),
-                )
+                ).also {
+                    // Set the flag INSIDE the crypto dispatcher block, right after the key
+                    // is committed to the KeyStore. withContext has a prompt-cancellation
+                    // guarantee: if the caller's job is cancelled while keygen runs, the
+                    // key is still created but withContext discards the result and throws
+                    // CancellationException. Setting the flag after the block would leave it
+                    // false, so the cancellation handler would skip cleanup and orphan the key.
+                    keyCreated = true
+                }
             }
-            keyCreated = true
 
             val fido2UserAuthResult = if (fmt != AttestationStatementFormat.NONE) {
                 val signatureAlgorithm = credTypeAndPubKeyAlg.alg.getSignatureAlgorithmName()
@@ -235,6 +242,8 @@ internal class Authenticator(
                 withContext(databaseDispatcher) {
                     db.increaseSignatureCounter(credId)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 throw WebAuthnException.CredSrcStorageException(
                     "Failed to increase signature counter for credId: $credId",
@@ -246,6 +255,8 @@ internal class Authenticator(
                 withContext(databaseDispatcher) {
                     db.getSignatureCounter(credId)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 throw WebAuthnException.CredSrcStorageException(
                     "Failed to get signature counter for credId: $credId",
@@ -380,6 +391,8 @@ internal class Authenticator(
                 withContext(databaseDispatcher) {
                     db.load(credId = descriptor.id)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 throw WebAuthnException.CredSrcStorageException(
                     "Failed to load credential source for credId: ${descriptor.id}",
@@ -416,6 +429,8 @@ internal class Authenticator(
                     withContext(databaseDispatcher) {
                         db.load(credId = credId)
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     throw WebAuthnException.CredSrcStorageException(
                         "Failed to load credential source for credId: $credId",
@@ -433,6 +448,8 @@ internal class Authenticator(
                 withContext(databaseDispatcher) {
                     db.loadAll(authType.aaguid)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 throw WebAuthnException.CredSrcStorageException("Failed to load all credential sources", e)
             }
@@ -515,6 +532,8 @@ internal class Authenticator(
                 withContext(databaseDispatcher) {
                     db.delete(credId = credId)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 throw WebAuthnException.CredSrcStorageException("Failed to delete credential for credId: $credId", e)
             }
@@ -553,6 +572,8 @@ internal class Authenticator(
             withContext(databaseDispatcher) {
                 db.store(credentialSource)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw WebAuthnException.CredSrcStorageException(
                 "Failed to store new credential for credId: ${credentialSource.id}",

@@ -27,6 +27,7 @@ import com.linecorp.webauthn.model.Fido2PromptInfo
 import com.linecorp.webauthn.model.Fido2UserAuthResult
 import java.security.Signature
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -195,6 +196,10 @@ internal class DeviceCredentialAuthenticationHandler(
                 message = e.message,
                 cause = e
             )
+        } catch (e: CancellationException) {
+            // Let coroutine cancellation propagate instead of reporting it as a
+            // (user-denied) authentication error.
+            throw e
         } catch (e: Exception) {
             throw AuthenticationHandler.AuthenticationErrorException(
                 message = "An unexpected error occurred",
