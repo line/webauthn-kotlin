@@ -171,6 +171,8 @@ class PublicKeyCredential(
 
                 try {
                     authenticator.retryCleanup(createResult.id, maxTries = 2, delayMillis = 1000)
+                } catch (e2: CancellationException) {
+                    throw e2
                 } catch (e2: Throwable) {
                     throw WebAuthnException.DeletionException(
                         "Error occurred while deleting key: $e2",

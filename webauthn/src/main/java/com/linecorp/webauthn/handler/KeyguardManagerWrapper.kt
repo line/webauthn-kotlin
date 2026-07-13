@@ -54,6 +54,12 @@ class KeyguardManagerWrapper {
         Log.d("KeyguardManagerWrapper", "Starting AuthenticationActivity with intent")
 
         return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation {
+                // The calling scope was cancelled: drop the pending callback so a late
+                // activity result cannot resume a stale (or a subsequent flow's)
+                // continuation, and dismiss the confirm-credential UI if it is still shown.
+                AuthenticationActivity.cancel()
+            }
             AuthenticationActivity.start(context, intent) { result, errorCode ->
                 if (result) {
                     Log.d("KeyguardManagerWrapper", "Authentication succeeded")
@@ -77,6 +83,10 @@ class KeyguardManagerWrapper {
             private const val REQUEST_CODE_CONFIRM_DEVICE_CREDENTIAL = 1
             private var callback: ((Boolean, Int?) -> Unit)? = null
 
+            // The currently displayed activity, so a cancelled coroutine can dismiss it.
+            // Cleared in onDestroy to bound the reference to the visible lifetime.
+            private var liveActivity: AuthenticationActivity? = null
+
             fun start(context: Context, intent: Intent, callback: (Boolean, Int?) -> Unit) {
                 this.callback = callback
                 val activityIntent = Intent(context, AuthenticationActivity::class.java).apply {
@@ -96,10 +106,22 @@ class KeyguardManagerWrapper {
                 callback?.invoke(result, errorCode)
                 callback = null
             }
+
+            /**
+             * Invoked when the calling coroutine is cancelled. Drops the pending callback
+             * (so a late activity result is ignored rather than resuming a stale/other
+             * continuation) and finishes the confirm-credential activity if it is still
+             * on screen. finish() must run on the main thread.
+             */
+            fun cancel() {
+                callback = null
+                liveActivity?.let { activity -> activity.runOnUiThread { activity.finish() } }
+            }
         }
 
         override fun onCreate(savedInstanceState: Bundle?) {
             super.onCreate(savedInstanceState)
+            liveActivity = this
             if (savedInstanceState != null) {
                 // Re-created (configuration change / process restore): the confirmation
                 // launched from the original instance is still in flight; do not fire a
@@ -137,6 +159,13 @@ class KeyguardManagerWrapper {
                 }
             }
             finish()
+        }
+
+        override fun onDestroy() {
+            super.onDestroy()
+            if (liveActivity === this) {
+                liveActivity = null
+            }
         }
     }
 }

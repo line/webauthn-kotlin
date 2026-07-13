@@ -552,6 +552,10 @@ internal class Authenticator(
             try {
                 cleanup(credId)
                 return
+            } catch (e: CancellationException) {
+                // Coroutine cancellation is not a cleanup failure: let it propagate instead
+                // of retrying or being re-wrapped as a DeletionException by the callers.
+                throw e
             } catch (e: Throwable) {
                 if (attempt == maxTries - 1) throw e
                 delay(delayMillis)
@@ -616,6 +620,8 @@ internal class Authenticator(
         return try {
             retryCleanup(credId, maxTries = 2, delayMillis = 1000)
             Result.failure(authenticatorException)
+        } catch (e2: CancellationException) {
+            throw e2
         } catch (e2: Throwable) {
             Result.failure(
                 WebAuthnException.DeletionException(
