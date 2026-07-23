@@ -26,7 +26,7 @@ import java.io.ByteArrayOutputStream
 interface CborSerializable {
     fun <T : AbstractBuilder<*>?> toCBOR(builder: MapBuilder<T>): T
 
-    fun toCBOR(canonical: Boolean = true): ByteArray {
+    fun toCBOR(): ByteArray {
         try {
             val baos = ByteArrayOutputStream()
             // addMap() produces a definite-length map. startMap() would produce an
