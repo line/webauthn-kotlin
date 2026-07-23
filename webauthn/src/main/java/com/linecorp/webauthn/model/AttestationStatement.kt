@@ -61,7 +61,7 @@ enum class COSEAlgorithmIdentifier(val value: Long) {
     ES256(-7), // ECDSA with SHA-256
     ES384(-35), // ECDSA with SHA-384
     ES512(-36), // ECDSA with SHA-512
-    ES256K(-43), // ECDSA using P-256K and SHA-256
+    ES256K(-47), // ECDSA using secp256k1 curve and SHA-256
     ;
 
     companion object {
