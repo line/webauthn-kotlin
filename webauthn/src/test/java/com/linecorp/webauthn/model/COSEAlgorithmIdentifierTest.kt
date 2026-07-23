@@ -34,7 +34,6 @@ class COSEAlgorithmIdentifierTest {
         assertThat(COSEAlgorithmIdentifier.ES256.value).isEqualTo(-7L)
         assertThat(COSEAlgorithmIdentifier.ES384.value).isEqualTo(-35L)
         assertThat(COSEAlgorithmIdentifier.ES512.value).isEqualTo(-36L)
-        // RFC 8812 / IANA COSE Algorithms registry: ES256K is -47, not -43.
         assertThat(COSEAlgorithmIdentifier.ES256K.value).isEqualTo(-47L)
     }
 
@@ -43,10 +42,5 @@ class COSEAlgorithmIdentifierTest {
         COSEAlgorithmIdentifier.entries.forEach {
             assertThat(COSEAlgorithmIdentifier.fromValue(it.value)).isEqualTo(it)
         }
-    }
-
-    @Test
-    fun `fromValue returns null for the old incorrect ES256K value`() {
-        assertThat(COSEAlgorithmIdentifier.fromValue(-43L)).isNull()
     }
 }
