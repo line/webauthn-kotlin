@@ -27,9 +27,12 @@ import com.linecorp.webauthn.model.AuthenticatorType
 import com.linecorp.webauthn.publickeycredential.PublicKeyCredential
 import com.linecorp.webauthn.util.FakeRelyingParty
 import com.linecorp.webauthn.util.MockCredentialSourceStorage
+import com.linecorp.webauthn.util.SecureExecutionHelper
 import com.linecorp.webauthn.util.TestAuthenticatorFactory
 import com.linecorp.webauthn.util.TestFragmentActivity
 import java.security.KeyStore
+import java.security.MessageDigest
+import java.security.Signature
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.jupiter.api.AfterEach
@@ -111,6 +114,18 @@ class PublicKeyCredentialEndToEndTest {
         // rpIdHash 32 + flags 1 + signCount 4, with no attested credential data and no extensions.
         assertThat(got.authenticatorAssertionResponse.authenticatorData).hasLength(37)
         assertThat(got.id).isEqualTo(created.id)
+
+        // What a relying party does with the response, and the only check here that depends on *which*
+        // bytes were signed: the hash is recomputed from the clientDataJSON the SDK produced, exactly as a
+        // server would, so this covers the whole chain - collected client data, its SHA-256, the
+        // authenticator data, the key the credential id names.
+        val clientDataHash = MessageDigest.getInstance("SHA-256")
+            .digest(got.authenticatorAssertionResponse.clientDataJSON)
+        val verifier = Signature.getInstance("SHA256withECDSA").apply {
+            initVerify(SecureExecutionHelper.getPublicKey(created.id))
+            update(got.authenticatorAssertionResponse.authenticatorData + clientDataHash)
+        }
+        assertThat(verifier.verify(got.authenticatorAssertionResponse.signature)).isTrue()
 
         // Exactly one row for one registration: `getAllAccounts` used to loop over all four authenticator
         // types and return every credential once per type.

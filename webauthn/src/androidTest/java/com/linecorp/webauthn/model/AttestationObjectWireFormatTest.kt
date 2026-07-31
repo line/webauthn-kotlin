@@ -26,6 +26,7 @@ import com.linecorp.webauthn.authenticator.objectgenerator.AndroidKeyObjectGener
 import com.linecorp.webauthn.authenticator.objectgenerator.Fido2ObjectGenerator
 import com.linecorp.webauthn.authenticator.objectgenerator.NoneObjectGenerator
 import com.linecorp.webauthn.util.Fido2Util
+import com.linecorp.webauthn.util.SecureExecutionHelper
 import com.linecorp.webauthn.util.TestAuthenticatorFactory
 import com.linecorp.webauthn.util.toBase64url
 import java.nio.ByteBuffer
@@ -48,7 +49,9 @@ import co.nstant.`in`.cbor.model.Number as CborNumber
  * the property that a synthetic fixture cannot check.
  *
  * Keys differ on every run, so nothing here compares against a fixed hex string. The assertions are the
- * raw CBOR framing bytes plus a structural parse of the fixed-layout authenticator data.
+ * raw CBOR framing bytes, a structural parse of the fixed-layout authenticator data, and - for
+ * `android-key` - a verification of the attestation statement's signature with the credential's own public
+ * key, which is the half of the registration response a relying party checks cryptographically.
  */
 class AttestationObjectWireFormatTest {
 
@@ -98,6 +101,19 @@ class AttestationObjectWireFormatTest {
             expectedAttStmtHeader = 0xa3.toByte(),
         )
         assertAuthenticatorDataLayout(attestationObject.authData, credId)
+
+        // The attestation statement is a signature over the same authenticator data and client data hash
+        // that an assertion signs, so it fails for the same reasons: the wrong hash, the concatenation the
+        // other way round, a key that is not the credential's. Nothing else in this file depends on which
+        // bytes went in. The `none` format carries no signature, so this half only exists here.
+        val statement = attestationObject.attStmt as AndroidKeyAttestationStatement
+        val verifier = Signature.getInstance("SHA256withECDSA").apply {
+            initVerify(SecureExecutionHelper.getPublicKey(credId))
+            update(attestationObject.authData + clientDataHash)
+        }
+        assertThat(verifier.verify(statement.sig)).isTrue()
+        assertThat(statement.alg).isEqualTo(COSEAlgorithmIdentifier.ES256.value)
+        assertThat(statement.x5c).isNotEmpty()
     }
 
     /**

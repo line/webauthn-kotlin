@@ -36,6 +36,7 @@ import com.linecorp.webauthn.model.PublicKeyCredentialRpEntity
 import com.linecorp.webauthn.model.PublicKeyCredentialType
 import com.linecorp.webauthn.model.PublicKeyCredentialUserEntity
 import com.linecorp.webauthn.util.MockCredentialSourceStorage
+import com.linecorp.webauthn.util.SecureExecutionHelper
 import com.linecorp.webauthn.util.TestFragmentActivity
 import com.linecorp.webauthn.util.toBase64url
 import io.mockk.coEvery
@@ -226,6 +227,17 @@ class AuthenticatorTest {
             assertThat(assertionResult.signature).isNotEmpty()
             assertThat(assertionResult.userHandle).isNotNull()
 
+            // The functional assertion. Everything above describes the shape of the assertion; this is the
+            // one thing a relying party actually computes, and it is the only check that fails if the wrong
+            // bytes were signed - a different hash, the concatenation the other way round, another key.
+            // The algorithm name is spelled out rather than taken from the SDK's own mapping, and the
+            // public key is read back out of the keystore under the alias the credential id names.
+            val verifier = Signature.getInstance("SHA256withECDSA").apply {
+                initVerify(SecureExecutionHelper.getPublicKey(newAlias))
+                update(assertionResult.authenticatorData + dummyByteArray)
+            }
+            assertThat(verifier.verify(assertionResult.signature)).isTrue()
+
             // Erase a key and a credential for next tests
             keyStore.deleteEntry(newAlias)
             mockCredentialSourceStorage.delete(newAlias)
@@ -255,9 +267,11 @@ class AuthenticatorTest {
                 }
             }
             failure?.let { e ->
-                // The class name as well as the message: a message-less throwable used to report nothing.
-                assertWithMessage("Expected no exception, but got: ${e::class.java.name}: ${e.message}")
-                    .fail()
+                // Rethrown with the original attached rather than through assertWithMessage(...).fail(),
+                // which reports the message and drops the frames that say where it came from - the reason
+                // for capturing the throwable in the first place. The class name is named as well as the
+                // message, because a message-less throwable used to report nothing at all.
+                throw AssertionError("Expected no exception, but got: ${e::class.java.name}: ${e.message}", e)
             }
         }
     }

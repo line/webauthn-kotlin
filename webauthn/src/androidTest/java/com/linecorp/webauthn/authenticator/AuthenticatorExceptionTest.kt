@@ -111,7 +111,7 @@ class AuthenticatorExceptionTest {
     }
 
     @Test
-    fun makeCredentialReportsInvalidStateForAnExcludedCredentialAndLeavesNoNewKey(): Unit = onActivity { activity ->
+    fun makeCredentialReportsInvalidStateForAnAlreadyRegisteredCredential(): Unit = onActivity { activity ->
         val registeredCredId = register(activity)
         val aliasesAfterRegistration = keyStore.aliases().toList().toSet()
 
@@ -134,8 +134,12 @@ class AuthenticatorExceptionTest {
         assertThat(result.isFailure).isTrue()
         assertThat(result.exceptionOrNull())
             .isInstanceOf(WebAuthnException.CoreException.InvalidStateException::class.java)
-        // The rejected registration must not leave key material behind, and must not take the already
-        // registered credential's key with it either.
+        // The exclusion is checked before any key is generated, so this pins where in the sequence the
+        // rejection happens - no key is created at all - and that the cleanup which then runs over an
+        // alias that never existed does not take the already registered credential with it. It is
+        // deliberately not a test of failure-path cleanup: no key material exists on this path for cleanup
+        // to miss. That property is covered by the relying-party rejection in
+        // com.linecorp.webauthn.PublicKeyCredentialEndToEndTest, where the key does get created first.
         assertThat(keyStore.aliases().toList().toSet()).isEqualTo(aliasesAfterRegistration)
         assertThat(keyStore.containsAlias(registeredCredId)).isTrue()
         assertThat(db.load(registeredCredId)).isNotNull()

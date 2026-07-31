@@ -20,7 +20,6 @@ import com.linecorp.webauthn.model.AttestationConveyancePreference
 import com.linecorp.webauthn.model.AuthenticatorSelectionCriteria
 import com.linecorp.webauthn.model.COSEAlgorithmIdentifier
 import com.linecorp.webauthn.model.PublicKeyCredentialCreateResult
-import com.linecorp.webauthn.model.PublicKeyCredentialDescriptor
 import com.linecorp.webauthn.model.PublicKeyCredentialGetResult
 import com.linecorp.webauthn.model.PublicKeyCredentialParams
 import com.linecorp.webauthn.model.PublicKeyCredentialRpEntity
@@ -38,7 +37,8 @@ import com.linecorp.webauthn.rp.RelyingParty
  *
  * There is no server: the point is to reach the real `PublicKeyCredential.create`/`get` path on a device
  * and then inspect the results a relying party would actually receive - the `clientDataJSON`, the
- * attestation object, the assertion signature - rather than to verify them cryptographically.
+ * attestation object, the assertion signature. Verification of those is left to the test, which does check
+ * the assertion signature the way a server would.
  *
  * [failVerifyRegistrationWith] turns `verifyRegistration` into a failure without touching the SDK, which
  * is how the registration-cleanup path is exercised through the public API.
@@ -56,23 +56,9 @@ class FakeRelyingParty(
     val registrationChallenge: String = Fido2Util.generateRandomByteArray(32).toBase64url()
     val authenticationChallenge: String = Fido2Util.generateRandomByteArray(32).toBase64url()
 
-    /** Sent as `excludeCredentials` in the registration data. */
-    var excludeCredentials: List<PublicKeyCredentialDescriptor>? = null
-
-    /** Sent as `allowCredentials` in the authentication data; null lets the authenticator pick. */
-    var allowCredentials: List<PublicKeyCredentialDescriptor>? = null
-
     /** When set, `verifyRegistration` records the result and then throws this. */
     var failVerifyRegistrationWith: Throwable? = null
 
-    var registrationDataRequests: Int = 0
-        private set
-    var authenticationDataRequests: Int = 0
-        private set
-    var verifiedRegistrations: Int = 0
-        private set
-    var verifiedAuthentications: Int = 0
-        private set
     var lastCreateResult: PublicKeyCredentialCreateResult? = null
         private set
     var lastGetResult: PublicKeyCredentialGetResult? = null
@@ -91,49 +77,40 @@ class FakeRelyingParty(
         username = user.name,
     )
 
-    fun descriptorFor(credId: String): PublicKeyCredentialDescriptor = PublicKeyCredentialDescriptor(
-        type = PublicKeyCredentialType.PUBLIC_KEY.value,
-        id = credId,
-        transports = null,
+    override suspend fun getRegistrationData(options: RegistrationOptions): RegistrationData = RegistrationData(
+        attestation = options.attestation,
+        authenticatorSelection = options.authenticatorSelection,
+        challenge = registrationChallenge,
+        // Empty rather than populated: a credential of this relying party's own would make every second
+        // registration an InvalidStateException, which is a case
+        // com.linecorp.webauthn.authenticator.AuthenticatorExceptionTest covers directly.
+        excludeCredentials = null,
+        // Null rather than a ClientExtensionInput: extension processing is a documented no-op, and a
+        // null input is what keeps the authenticator data free of an extensions block.
+        extensions = null,
+        pubKeyCredParams = listOf(
+            PublicKeyCredentialParams(PublicKeyCredentialType.PUBLIC_KEY, COSEAlgorithmIdentifier.ES256)
+        ),
+        rp = rp,
+        user = user,
     )
-
-    override suspend fun getRegistrationData(options: RegistrationOptions): RegistrationData {
-        registrationDataRequests += 1
-        return RegistrationData(
-            attestation = options.attestation,
-            authenticatorSelection = options.authenticatorSelection,
-            challenge = registrationChallenge,
-            excludeCredentials = excludeCredentials,
-            // Null rather than a ClientExtensionInput: extension processing is a documented no-op, and a
-            // null input is what keeps the authenticator data free of an extensions block.
-            extensions = null,
-            pubKeyCredParams = listOf(
-                PublicKeyCredentialParams(PublicKeyCredentialType.PUBLIC_KEY, COSEAlgorithmIdentifier.ES256)
-            ),
-            rp = rp,
-            user = user,
-        )
-    }
 
     override suspend fun verifyRegistration(result: PublicKeyCredentialCreateResult) {
         lastCreateResult = result
-        verifiedRegistrations += 1
         failVerifyRegistrationWith?.let { throw it }
     }
 
-    override suspend fun getAuthenticationData(options: AuthenticationOptions): AuthenticationData {
-        authenticationDataRequests += 1
-        return AuthenticationData(
-            allowCredentials = allowCredentials,
-            challenge = authenticationChallenge,
-            extensions = null,
-            rpId = rp.id,
-            userVerification = options.userVerification,
-        )
-    }
+    override suspend fun getAuthenticationData(options: AuthenticationOptions): AuthenticationData = AuthenticationData(
+        // Null, so the authenticator selects by relying-party id out of its own storage rather than
+        // being handed the answer.
+        allowCredentials = null,
+        challenge = authenticationChallenge,
+        extensions = null,
+        rpId = rp.id,
+        userVerification = options.userVerification,
+    )
 
     override suspend fun verifyAuthentication(result: PublicKeyCredentialGetResult) {
         lastGetResult = result
-        verifiedAuthentications += 1
     }
 }
