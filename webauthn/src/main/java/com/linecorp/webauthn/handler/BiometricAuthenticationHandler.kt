@@ -30,15 +30,24 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
+/**
+ * Message carried by every [AuthenticationHandler.ERROR_HOST_STATE_SAVED] failure, in both handlers.
+ *
+ * Top-level and `internal`: the public [AuthenticationHandler] interface must gain no member.
+ */
+internal const val HOST_STATE_SAVED_MESSAGE =
+    "Cannot show the authentication prompt: the host activity has saved its state."
+
 internal class BiometricAuthenticationHandler(
     private val authHandlerDispatcher: CoroutineDispatcher = Dispatchers.Main,
-) : AuthenticationHandler {
-    override fun isSupported(context: Context): Boolean {
-        val biometricManager = BiometricManager.from(context)
-        return biometricManager.canAuthenticate(
-            BiometricManager.Authenticators.BIOMETRIC_STRONG
-        ) == BiometricManager.BIOMETRIC_SUCCESS
-    }
+) : AuthenticationHandler,
+    AuthenticationCapability {
+
+    override fun canAuthenticateStatus(context: Context): Int =
+        BiometricManager.from(context).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+
+    override fun isSupported(context: Context): Boolean =
+        canAuthenticateStatus(context) == BiometricManager.BIOMETRIC_SUCCESS
 
     override suspend fun authenticate(
         activity: FragmentActivity,
@@ -52,16 +61,20 @@ internal class BiometricAuthenticationHandler(
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult = withContext(authHandlerDispatcher) {
         suspendCancellableCoroutine { continuation ->
-            val promptInfo =
-                BiometricPrompt.PromptInfo.Builder()
-                    .setTitle(fido2PromptInfo?.title ?: "Biometric Authentication")
-                    .setSubtitle(fido2PromptInfo?.subtitle ?: "Enter biometric credentials to proceed")
-                    .setDescription(
-                        fido2PromptInfo?.description
-                            ?: "Input your Fingerprint or FaceID to ensure it's you!",
+            // androidx.biometric returns from authenticate() without invoking any callback when the host
+            // FragmentManager has saved state (BiometricPrompt.authenticateInternal). That would leave
+            // this continuation unresumed forever, and the caller holds a process-wide lock. Fail fast.
+            if (activity.supportFragmentManager.isStateSaved) {
+                continuation.resumeWithException(
+                    AuthenticationHandler.AuthenticationErrorException(
+                        errorCode = AuthenticationHandler.ERROR_HOST_STATE_SAVED,
+                        message = HOST_STATE_SAVED_MESSAGE
                     )
-                    .setNegativeButtonText(fido2PromptInfo?.negativeButtonText ?: "Cancel")
-                    .build()
+                )
+                return@suspendCancellableCoroutine
+            }
+
+            val promptInfo = buildPromptInfo(fido2PromptInfo)
 
             val biometricPrompt =
                 BiometricPrompt(
@@ -109,4 +122,24 @@ internal class BiometricAuthenticationHandler(
             }
         }
     }
+
+    /**
+     * Builds the prompt configuration.
+     *
+     * `setAllowedAuthenticators` must be explicit: with it unset, androidx derives
+     * `crypto != null ? BIOMETRIC_STRONG : BIOMETRIC_WEAK`
+     * (`AuthenticatorUtils.getConsolidatedAuthenticators`). `AttestationStatementFormat.NONE` passes no
+     * signature provider and therefore no `CryptoObject`, so registration would run a Class 2 (Weak)
+     * capable prompt while [isSupported] gates on Class 3 (Strong) and the generated key requires it.
+     */
+    internal fun buildPromptInfo(fido2PromptInfo: Fido2PromptInfo?): BiometricPrompt.PromptInfo =
+        BiometricPrompt.PromptInfo.Builder()
+            .setTitle(fido2PromptInfo?.title ?: "Biometric Authentication")
+            .setSubtitle(fido2PromptInfo?.subtitle ?: "Enter biometric credentials to proceed")
+            .setDescription(
+                fido2PromptInfo?.description ?: "Input your Fingerprint or FaceID to ensure it's you!",
+            )
+            .setNegativeButtonText(fido2PromptInfo?.negativeButtonText ?: "Cancel")
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            .build()
 }

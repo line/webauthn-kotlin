@@ -16,6 +16,7 @@
 
 package com.linecorp.webauthn.authenticator.objectgenerator
 
+import com.linecorp.webauthn.exceptions.WebAuthnException
 import com.linecorp.webauthn.model.AndroidKeyAttestationStatement
 import com.linecorp.webauthn.model.AttestationObject
 import com.linecorp.webauthn.model.AttestationStatement
@@ -61,8 +62,13 @@ internal class AndroidKeyObjectGenerator : Fido2ObjectGenerator() {
                 attestedCredData = attestedCredData,
             )
         val authenticatorDataBytes = authenticatorData.toByteArray()
-        signature!!.update(authenticatorDataBytes + hash)
-        val sig = signature.sign()
+        // An android-key statement is a signature over the authenticator data, so a null Signature here is
+        // an SDK wiring error rather than anything the caller did. `!!` reported it as a bare
+        // NullPointerException that the callers above flattened into "an unknown error occurred".
+        val signingSignature = signature
+            ?: throw WebAuthnException.UnknownException("An ANDROID_KEY attestation requires a signature.")
+        signingSignature.update(authenticatorDataBytes + hash)
+        val sig = signingSignature.sign()
         val certChain = SecureExecutionHelper.getX509Certificates(keyAlias)
         val x5c = certChain.map { it.encoded }
         val attStmt: AttestationStatement = AndroidKeyAttestationStatement(

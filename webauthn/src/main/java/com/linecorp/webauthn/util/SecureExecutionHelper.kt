@@ -42,6 +42,13 @@ internal object SecureExecutionHelper {
         }
     }
 
+    /** Deletes [keyAlias] if it exists. Unlike [deleteKey] this never throws for a missing alias. */
+    fun deleteKeyIfPresent(keyAlias: String) {
+        if (containAlias(keyAlias)) {
+            deleteKey(keyAlias)
+        }
+    }
+
     fun getKey(keyAlias: String): Key? {
         synchronized(lock) {
             try {

@@ -23,14 +23,58 @@ sealed class WebAuthnException(override val message: String?, override val cause
         class ConstraintException(
             message: String? = "A mutation operation in a transaction failed because a constraint was not satisfied.",
             cause: Throwable? = null
-        ) : CoreException(message, cause)
+        ) : CoreException(message, cause) {
+            /**
+             * The `BiometricManager.canAuthenticate()` status that caused this exception, when known.
+             *
+             * Compare against `BiometricManager.BIOMETRIC_*` constants, e.g.
+             * `BIOMETRIC_ERROR_NONE_ENROLLED` (the user can fix it by enrolling a biometric) versus
+             * `BIOMETRIC_ERROR_NO_HARDWARE` (nothing the user can do right now, but see
+             * [com.linecorp.webauthn.model.AuthenticationAvailability.Reason.NO_HARDWARE] before caching it
+             * as permanent). On API levels below 30 the device-credential path
+             * has no platform status code, so it reports `BIOMETRIC_ERROR_NONE_ENROLLED` derived from
+             * `KeyguardManager.isDeviceSecure`. `null` only if the authentication handler in use exposes no
+             * status at all.
+             */
+            var canAuthenticateStatus: Int? = null
+        }
         class InvalidStateException(message: String? = "The object is in an invalid state.", cause: Throwable? = null) :
             CoreException(message, cause)
-        class NotAllowedException(
+        open class NotAllowedException(
             message: String? = "The request is not allowed by the user agent or the platform in the current context, " +
                 "possibly because the user denied permission.",
             cause: Throwable? = null
-        ) : CoreException(message, cause)
+        ) : CoreException(message, cause) {
+            /**
+             * The `BiometricPrompt.ERROR_*` code that caused this exception, when known.
+             *
+             * Negative values are SDK-defined and never collide with a `BiometricPrompt.ERROR_*`
+             * constant; see [com.linecorp.webauthn.handler.AuthenticationHandler.ERROR_HOST_STATE_SAVED].
+             * They may still coincide numerically with a `BiometricManager.BIOMETRIC_*` status
+             * (`BIOMETRIC_STATUS_UNKNOWN` is -1), but that is a different value space: those are reported
+             * through [ConstraintException.canAuthenticateStatus], never here.
+             *
+             * **`errorCode == -1` is retryable.** It is
+             * [com.linecorp.webauthn.handler.AuthenticationHandler.ERROR_HOST_STATE_SAVED]: the prompt was
+             * never shown, because the host activity had already saved its instance state, so the user was
+             * given no chance to authenticate and nothing about the device or the credential is wrong.
+             * Call `create()`/`get()` again once the host is interactive - typically from `onResume`, or
+             * from the user's next tap - rather than reporting a terminal authentication failure. Before
+             * this release the same situation left the operation suspended forever instead.
+             */
+            var errorCode: Int? = null
+        }
+
+        /**
+         * The user deliberately dismissed the authentication prompt.
+         *
+         * This is a normal outcome, not a failure of the SDK or the device, and should not be reported
+         * as an error. It is a subtype of [NotAllowedException] so existing `catch` clauses keep working.
+         */
+        class UserCancelledException(
+            message: String? = "The user cancelled the authentication prompt.",
+            cause: Throwable? = null
+        ) : NotAllowedException(message, cause)
         class NotSupportedException(message: String? = "The operation is not supported.", cause: Throwable? = null) :
             CoreException(message, cause)
         class TypeException(message: String? = null, cause: Throwable? = null) : CoreException(message, cause)
@@ -46,8 +90,22 @@ sealed class WebAuthnException(override val message: String?, override val cause
             cause: Throwable? = null
         ) : AuthenticationException(message, cause)
     }
-    class SecureExecutionException(message: String? = null, cause: Throwable? = null) :
+    open class SecureExecutionException(message: String? = null, cause: Throwable? = null) :
         WebAuthnException(message, cause)
+
+    /**
+     * The platform keystore rejected an operation during credential creation. Key generation is the usual
+     * one, but signing and the attestation certificate-chain read reach the same handler, so the message
+     * names the throwable rather than asserting the operation.
+     *
+     * A subtype of [SecureExecutionException] so consumer `when` blocks over [WebAuthnException]
+     * stay exhaustive.
+     */
+    class KeyGenerationException(message: String? = null, cause: Throwable? = null) :
+        SecureExecutionException(message, cause) {
+        /** `android.security.KeyStoreException.getNumericErrorCode()` when it could be read. */
+        var keyStoreErrorCode: Int? = null
+    }
     class KeyNotFoundException(message: String? = null, cause: Throwable? = null) : WebAuthnException(message, cause)
     class UnknownException(message: String, cause: Throwable? = null) : WebAuthnException(message, cause)
     class UtilityException(message: String, cause: Throwable? = null) : WebAuthnException(message, cause)
@@ -62,6 +120,12 @@ sealed class WebAuthnException(override val message: String?, override val cause
      * @param cause The cause of the issue during the deletion process.
      * @param trigger The exception that triggered the deletion.
      */
-    class DeletionException(message: String, cause: Throwable? = null, trigger: Throwable? = null) :
-        WebAuthnException(message, cause)
+    class DeletionException(message: String, cause: Throwable? = null, val trigger: Throwable? = null) :
+        WebAuthnException(message, cause) {
+        init {
+            if (trigger != null && trigger !== cause && trigger !== this) {
+                addSuppressed(trigger)
+            }
+        }
+    }
 }

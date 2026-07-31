@@ -21,9 +21,9 @@ import android.content.Context
 import android.content.Intent
 import android.hardware.biometrics.BiometricPrompt
 import android.os.Bundle
-import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import com.linecorp.webauthn.model.Fido2PromptInfo
+import com.linecorp.webauthn.util.WebAuthnLog
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -46,28 +46,34 @@ class KeyguardManagerWrapper {
             throw KeyguardNotSecuredException("Keyguard not secured")
         }
 
-        val intent = keyguardManager.createConfirmDeviceCredentialIntent(
-            fido2PromptInfo?.title ?: "Device Credential Authentication",
-            fido2PromptInfo?.description ?: "Input your Fingerprint or device credential to ensure it's you!"
-        ) ?: throw DeviceCredentialIntentNotAvailableException("Device credential intent not available")
+        val title = fido2PromptInfo?.title ?: "Device Credential Authentication"
+        val description = fido2PromptInfo?.description
+            ?: "Input your Fingerprint or device credential to ensure it's you!"
 
-        Log.d("KeyguardManagerWrapper", "Starting AuthenticationActivity with intent")
+        // Confirm the intent can be built before starting the activity, so an unavailable keyguard
+        // surfaces here rather than inside onCreate where there is no continuation to fail.
+        keyguardManager.createConfirmDeviceCredentialIntent(title, description)
+            ?: throw DeviceCredentialIntentNotAvailableException("Device credential intent not available")
 
         return suspendCancellableCoroutine { continuation ->
-            AuthenticationActivity.start(context, intent) { result, errorCode ->
-                if (result) {
-                    Log.d("KeyguardManagerWrapper", "Authentication succeeded")
-                    continuation.resume(true)
-                } else {
-                    Log.d("KeyguardManagerWrapper", "Authentication failed")
-                    continuation.resumeWithException(
-                        KeyguardManagerAuthenticationFailedException(
-                            errorCode = errorCode,
-                            message = "Authentication failed with errorCode: $errorCode"
+            val callback: (Boolean, Int?) -> Unit = { result, errorCode ->
+                if (continuation.isActive) {
+                    if (result) {
+                        continuation.resume(true)
+                    } else {
+                        continuation.resumeWithException(
+                            KeyguardManagerAuthenticationFailedException(
+                                errorCode = errorCode,
+                                message = "Authentication failed with errorCode: $errorCode"
+                            )
                         )
-                    )
+                    }
                 }
             }
+            // Registered before start so cancellation is never unhandled, not even in the window
+            // between installing the callback and returning from start.
+            continuation.invokeOnCancellation { AuthenticationActivity.clearCallback(callback) }
+            AuthenticationActivity.start(context, title, description, callback)
         }
     }
 
@@ -75,49 +81,84 @@ class KeyguardManagerWrapper {
 
         companion object {
             private const val REQUEST_CODE_CONFIRM_DEVICE_CREDENTIAL = 1
-            private var callback: ((Boolean, Int?) -> Unit)? = null
+            private const val EXTRA_TITLE = "fido2_auth_title"
+            private const val EXTRA_DESCRIPTION = "fido2_auth_description"
 
-            fun start(context: Context, intent: Intent, callback: (Boolean, Int?) -> Unit) {
-                this.callback = callback
+            private val callbackRef = java.util.concurrent.atomic.AtomicReference<((Boolean, Int?) -> Unit)?>(null)
+
+            @JvmSynthetic
+            internal fun start(
+                context: Context,
+                title: CharSequence,
+                description: CharSequence,
+                callback: (Boolean, Int?) -> Unit
+            ) {
+                callbackRef.set(callback)
                 val activityIntent = Intent(context, AuthenticationActivity::class.java).apply {
-                    putExtra("fido2_auth_intent", intent)
+                    putExtra(EXTRA_TITLE, title)
+                    putExtra(EXTRA_DESCRIPTION, description)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                Log.d("AuthenticationActivity", "Starting activity with intent")
-                context.startActivity(activityIntent)
+                try {
+                    context.startActivity(activityIntent)
+                } catch (e: Throwable) {
+                    // Nothing can deliver a result now, so release the slot instead of leaving the
+                    // callback and the continuation it captures parked in a static field.
+                    clearCallback(callback)
+                    throw e
+                }
             }
+
+            /**
+             * Clears [callback] only if it is still the installed one, so a flow can never strip the
+             * callback that a later flow installed and leave that flow unresolved.
+             */
+            @JvmSynthetic
+            internal fun clearCallback(callback: (Boolean, Int?) -> Unit) {
+                callbackRef.compareAndSet(callback, null)
+            }
+
+            /** Takes the callback so it can only ever fire once. */
+            private fun takeCallback(): ((Boolean, Int?) -> Unit)? = callbackRef.getAndSet(null)
         }
 
         override fun onCreate(savedInstanceState: Bundle?) {
             super.onCreate(savedInstanceState)
-            val intent = intent.getParcelableExtra<Intent>("fido2_auth_intent")
-            if (intent != null) {
-                Log.d("AuthenticationActivity", "Starting activity for result")
-                startActivityForResult(intent, REQUEST_CODE_CONFIRM_DEVICE_CREDENTIAL)
-            } else {
-                Log.d("AuthenticationActivity", "Intent is null, finishing activity")
-                callback?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
-                finish()
+            // On recreation the credential prompt is already in flight. Relaunching it would show the
+            // user a second prompt for one request, and reporting failure would abort a request that is
+            // still going to deliver a result.
+            if (savedInstanceState != null) {
+                return
             }
+            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            val confirmIntent = keyguardManager.createConfirmDeviceCredentialIntent(
+                intent.getCharSequenceExtra(EXTRA_TITLE),
+                intent.getCharSequenceExtra(EXTRA_DESCRIPTION)
+            )
+            if (confirmIntent == null) {
+                takeCallback()?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
+                finish()
+                return
+            }
+            // The prompt title and description come from the consumer's Fido2PromptInfo, so neither is
+            // logged; only the fact that the system prompt was launched.
+            WebAuthnLog.d("Launching the confirm-device-credential prompt.")
+            startActivityForResult(confirmIntent, REQUEST_CODE_CONFIRM_DEVICE_CREDENTIAL)
         }
 
         override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
             super.onActivityResult(requestCode, resultCode, data)
             if (requestCode == REQUEST_CODE_CONFIRM_DEVICE_CREDENTIAL) {
-                Log.d("AuthenticationActivity", "Received result: $resultCode")
                 when (resultCode) {
                     RESULT_OK -> {
-                        callback?.invoke(true, null)
-                        Log.d("AuthenticationActivity", "Authentication succeeded")
+                        WebAuthnLog.d("The device credential was confirmed.")
+                        takeCallback()?.invoke(true, null)
                     }
                     RESULT_CANCELED -> {
-                        Log.d("AuthenticationActivity", "Authentication canceled")
-                        callback?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED)
+                        WebAuthnLog.d("The confirm-device-credential prompt was dismissed.")
+                        takeCallback()?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED)
                     }
-                    else -> {
-                        Log.d("AuthenticationActivity", "Authentication failed")
-                        callback?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
-                    }
+                    else -> takeCallback()?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
                 }
             }
             finish()

@@ -16,8 +16,10 @@
 
 package com.linecorp.webauthn.authenticator.keygenerator
 
+import android.security.keystore.StrongBoxUnavailableException
 import com.linecorp.webauthn.model.COSEAlgorithmIdentifier
 import java.security.KeyPair
+import java.security.ProviderException
 
 abstract class Fido2KeyGenerator {
     val lock = Any()
@@ -29,4 +31,47 @@ abstract class Fido2KeyGenerator {
         isStrongBoxBacked: Boolean,
         userAuthenticationRequired: Boolean = true
     ): KeyPair
+
+    /**
+     * Runs [generate] with StrongBox and falls back to the TEE when the platform rejects it.
+     *
+     * [ProviderException] is the clause that matters: the platform raises [StrongBoxUnavailableException]
+     * only for a hardware-type-unavailable error, while every other KeyMint rejection — including the
+     * `UNIMPLEMENTED` this fallback was written for — arrives as a bare [ProviderException]. The narrower
+     * clause is a subtype of the broader one and is listed first purely to document that case; removing
+     * it would not change behaviour.
+     *
+     * If the retry also fails, the StrongBox failure is attached to it with `addSuppressed` so its
+     * KeyMint error code is still reachable (`Authenticator` walks `suppressed` as well as `cause`).
+     *
+     * This only helps a device that advertises StrongBox and then refuses to use it. A device that
+     * never advertised StrongBox is called with `isStrongBoxBacked == false` and has nothing to fall
+     * back to, so its failure still propagates on the first attempt.
+     */
+    protected fun generateWithStrongBoxFallback(
+        isStrongBoxBacked: Boolean,
+        generate: (strongBoxBacked: Boolean) -> KeyPair
+    ): KeyPair {
+        if (!isStrongBoxBacked) {
+            return generate(false)
+        }
+        return try {
+            generate(true)
+        } catch (e: StrongBoxUnavailableException) {
+            retryWithoutStrongBox(e, generate)
+        } catch (e: ProviderException) {
+            retryWithoutStrongBox(e, generate)
+        }
+    }
+
+    private fun retryWithoutStrongBox(first: Throwable, generate: (Boolean) -> KeyPair): KeyPair = try {
+        generate(false)
+    } catch (second: Throwable) {
+        // `addSuppressed` throws IllegalArgumentException on self-suppression, which a caller reusing one
+        // exception instance for both attempts would otherwise trigger in place of the real failure.
+        if (second !== first) {
+            second.addSuppressed(first)
+        }
+        throw second
+    }
 }

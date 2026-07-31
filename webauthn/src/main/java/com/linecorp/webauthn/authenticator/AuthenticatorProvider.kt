@@ -70,6 +70,11 @@ class AuthenticatorProvider(
             authType = authType,
             fido2PromptInfo = fido2PromptInfo,
             databaseDispatcher = databaseDispatcher,
+            // Passed explicitly rather than left to the default, and not exposed as a constructor parameter
+            // of this class: AuthenticatorProvider is public API, so adding a defaulted parameter here would
+            // change the synthetic constructor descriptor and break already-compiled consumers with a
+            // NoSuchMethodError. Keystore work is blocking I/O into keystore2 either way.
+            keystoreDispatcher = Dispatchers.IO,
         )
     }
 }
