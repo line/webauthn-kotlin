@@ -27,6 +27,7 @@ import com.linecorp.webauthn.authenticator.keygenerator.Fido2KeyGenerator
 import com.linecorp.webauthn.authenticator.objectgenerator.AndroidKeyObjectGenerator
 import com.linecorp.webauthn.authenticator.objectgenerator.NoneObjectGenerator
 import com.linecorp.webauthn.handler.BiometricAuthenticationHandler
+import com.linecorp.webauthn.model.AuthenticatorDataFlags
 import com.linecorp.webauthn.model.AuthenticatorType
 import com.linecorp.webauthn.model.COSEAlgorithmIdentifier
 import com.linecorp.webauthn.model.Fido2UserAuthResult
@@ -36,6 +37,7 @@ import com.linecorp.webauthn.model.PublicKeyCredentialType
 import com.linecorp.webauthn.model.PublicKeyCredentialUserEntity
 import com.linecorp.webauthn.util.MockCredentialSourceStorage
 import com.linecorp.webauthn.util.TestFragmentActivity
+import com.linecorp.webauthn.util.toBase64url
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -43,6 +45,7 @@ import io.mockk.slot
 import java.security.KeyStore
 import java.security.Signature
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.params.ParameterizedTest
@@ -62,6 +65,7 @@ class AuthenticatorTest {
     private lateinit var dummyCredParams: List<PublicKeyCredentialParams>
     private lateinit var dummyRpId: String
     private lateinit var dummyByteArray: ByteArray
+    private lateinit var baselineAliases: Set<String>
 
     companion object {
         @JvmStatic
@@ -75,6 +79,7 @@ class AuthenticatorTest {
 
     @BeforeEach
     fun setUp() {
+        baselineAliases = keyStore.aliases().toList().toSet()
         dummyHash = ByteArray(32) { 0 }
         dummyRpEntity = PublicKeyCredentialRpEntity("example.com", "Example Relying Party")
         dummyUserEntity = PublicKeyCredentialUserEntity("user123", "User Name", "Display Name")
@@ -173,7 +178,7 @@ class AuthenticatorTest {
     private fun checkMakeCredentialAndGetAssertion(activity: FragmentActivity, authenticator: Authenticator) {
         runBlocking {
             val aliasListBefore = keyStore.aliases().toList()
-            authenticator.makeCredential(
+            val makeCredentialResult = authenticator.makeCredential(
                 activity = activity,
                 hash = dummyHash,
                 rpEntity = dummyRpEntity,
@@ -182,6 +187,11 @@ class AuthenticatorTest {
                 excludeCredDescriptorList = null,
                 extensions = null,
             )
+            // The Result used to be discarded. A failure was only caught indirectly, through the alias count
+            // below: handleMakeCredentialException cleans the key up, so the count does not rise. That works
+            // only because the cleanup alias is now correct, and it says nothing about why it failed.
+            assertWithMessage("makeCredential failed: ${makeCredentialResult.exceptionOrNull()}")
+                .that(makeCredentialResult.isSuccess).isTrue()
             val aliasListAfter = keyStore.aliases().toList()
 
             assertThat(aliasListAfter.size).isEqualTo(aliasListBefore.size + 1)
@@ -191,7 +201,7 @@ class AuthenticatorTest {
 
             assertThat(mockCredentialSourceStorage.load(newCredId)).isNotNull()
 
-            authenticator.getAssertion(
+            val getAssertionResult = authenticator.getAssertion(
                 activity = activity,
                 rpId = dummyRpId,
                 hash = dummyByteArray,
@@ -199,9 +209,29 @@ class AuthenticatorTest {
                 extensions = null
             )
 
+            // The assertion that was missing entirely. getAssertion catches every exception internally and
+            // returns Result.failure, so authentication could fail completely - no key, no signature, a
+            // storage error - while this test still passed.
+            assertWithMessage("getAssertion failed: ${getAssertionResult.exceptionOrNull()}")
+                .that(getAssertionResult.isSuccess).isTrue()
+            val assertionResult = getAssertionResult.getOrThrow()
+            assertThat(assertionResult.credentialId).hasLength(32)
+            assertThat(assertionResult.credentialId.toBase64url()).isEqualTo(newAlias)
+            // rpIdHash 32 + flags 1 + signCount 4, with no attested credential data and no extensions.
+            assertThat(assertionResult.authenticatorData).hasLength(37)
+            val flags = assertionResult.authenticatorData[32].toInt() and 0xff
+            val userPresentAndVerified = (AuthenticatorDataFlags.UP.value or AuthenticatorDataFlags.UV.value)
+                .toInt()
+            assertThat(flags and userPresentAndVerified).isEqualTo(userPresentAndVerified)
+            assertThat(assertionResult.signature).isNotEmpty()
+            assertThat(assertionResult.userHandle).isNotNull()
+
             // Erase a key and a credential for next tests
             keyStore.deleteEntry(newAlias)
             mockCredentialSourceStorage.delete(newAlias)
+            // The deletion used to be unchecked. KeyStore.deleteEntry is a silent no-op for an alias that
+            // does not exist, so only this proves the key is really gone from the device.
+            assertThat(keyStore.containsAlias(newAlias)).isFalse()
         }
     }
 
@@ -210,15 +240,36 @@ class AuthenticatorTest {
     @DisplayName("Authenticators are functioning properly.")
     fun testAuthenticator(authType: AuthenticatorType) {
         ActivityScenario.launch(TestFragmentActivity::class.java).use { scenario ->
+            var failure: Throwable? = null
             scenario.onActivity { activity: TestFragmentActivity ->
                 assignAuthenticator(authType)
                 try {
                     checkMakeCredentialAndGetAssertion(activity, authenticator)
-                } catch (e: Exception) {
-                    assertWithMessage("Expected no exception, but got: ${e.message}")
-                        .fail()
+                } catch (e: Throwable) {
+                    // Kept rather than reported here. This block runs on the main thread, and an
+                    // AssertionError raised there escapes into the Looper and takes the whole
+                    // instrumentation run down instead of failing this one test - which is precisely what
+                    // the assertions added above would do the first time they bite. `Exception` also let an
+                    // AssertionError through unhandled.
+                    failure = e
                 }
             }
+            failure?.let { e ->
+                // The class name as well as the message: a message-less throwable used to report nothing.
+                assertWithMessage("Expected no exception, but got: ${e::class.java.name}: ${e.message}")
+                    .fail()
+            }
         }
+    }
+
+    @AfterEach
+    fun tearDown() {
+        // The in-body cleanup above runs only on the success path. A failed assertion must not leave a
+        // hardware-backed key behind on a shared device, so anything this invocation added goes here too.
+        val leaked = keyStore.aliases().toList() - baselineAliases
+        for (alias in leaked) {
+            keyStore.deleteEntry(alias)
+        }
+        mockCredentialSourceStorage.removeAllData()
     }
 }
