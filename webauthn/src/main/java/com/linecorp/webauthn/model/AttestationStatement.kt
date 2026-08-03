@@ -61,7 +61,7 @@ enum class COSEAlgorithmIdentifier(val value: Long) {
     ES256(-7), // ECDSA with SHA-256
     ES384(-35), // ECDSA with SHA-384
     ES512(-36), // ECDSA with SHA-512
-    ES256K(-43), // ECDSA using P-256K and SHA-256
+    ES256K(-47), // ECDSA using secp256k1 curve and SHA-256 (RFC 8812)
     ;
 
     companion object {
@@ -115,7 +115,9 @@ fun COSEAlgorithmIdentifier.getAlgorithmParameterSpec(): AlgorithmParameterSpec?
     COSEAlgorithmIdentifier.EdDSA -> null
     COSEAlgorithmIdentifier.ES256 -> ECGenParameterSpec("secp256r1")
     COSEAlgorithmIdentifier.ES384 -> ECGenParameterSpec("secp384r1")
-    COSEAlgorithmIdentifier.ES512 -> ECGenParameterSpec("secp512r1")
+    // ES512 is defined over P-521; "secp521r1" is the JCA name for it. There is no secp512r1 curve, so
+    // the previous value could only ever raise InvalidAlgorithmParameterException.
+    COSEAlgorithmIdentifier.ES512 -> ECGenParameterSpec("secp521r1")
     COSEAlgorithmIdentifier.ES256K -> ECGenParameterSpec("secp256k1")
 }
 

@@ -30,6 +30,13 @@
   through its own extras.
 - The device-credential activity declares its own AppCompat theme, so it no longer crashes hosts that
   use a non-AppCompat theme.
+- `COSEAlgorithmIdentifier.ES256K` is `-47`, its value in the IANA COSE Algorithms registry, instead of
+  `-43`, which that registry assigns to SHA-384. `fromValue(-47)` now resolves and `fromValue(-43)`
+  returns `null`.
+- `COSEAlgorithmIdentifier.ES512` generates over `secp521r1`, the JCA name for the P-521 curve it is
+  defined on. The previous `secp512r1` names no curve, so generating an ES512 key through a
+  `Fido2KeyGenerator` directly could only fail with `InvalidAlgorithmParameterException`. The
+  `Authenticator` never selected ES512, so registration and authentication are unaffected.
 
 ### Added
 - `PublicKeyCredential.checkAuthenticationAvailability()` reports whether authentication is possible
