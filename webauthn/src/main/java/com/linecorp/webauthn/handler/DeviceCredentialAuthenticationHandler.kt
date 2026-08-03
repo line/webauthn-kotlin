@@ -70,8 +70,8 @@ internal class DeviceCredentialAuthenticationHandler(
         // (BiometricPrompt.authenticateInternal), and on API 29 the background-activity-launch rules drop
         // AuthenticationActivity's FLAG_ACTIVITY_NEW_TASK launch without startActivity throwing, so
         // KeyguardManagerWrapper's own continuation never resumes either. Both leave the caller's
-        // process-wide lock held. Checked here, ahead of the branch, because the keyguard path never
-        // reaches the re-check inside authenticateUserWithBiometricPrompt.
+        // process-wide lock held. Checked here so the caller's own dispatcher fails fast; each branch
+        // re-reads it after its hop to Main, which is the read that can actually see a late transition.
         if (activity.supportFragmentManager.isStateSaved) {
             throw AuthenticationHandler.AuthenticationErrorException(
                 errorCode = AuthenticationHandler.ERROR_HOST_STATE_SAVED,
@@ -176,6 +176,17 @@ internal class DeviceCredentialAuthenticationHandler(
         fido2PromptInfo: Fido2PromptInfo?,
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult = withContext(authHandlerDispatcher) {
+        // Re-read on Main for the same reason as the BiometricPrompt sibling above: the withContext hop
+        // posts rather than running inline, so an onSaveInstanceState or onStop already queued on the
+        // looper runs in between the check in `authenticate` and this block. Deliberately thrown ahead of
+        // the `try`, because the terminal `catch (e: Exception)` below would wrap it and lose the
+        // ERROR_HOST_STATE_SAVED code that tells the caller the operation is retryable.
+        if (activity.supportFragmentManager.isStateSaved) {
+            throw AuthenticationHandler.AuthenticationErrorException(
+                errorCode = AuthenticationHandler.ERROR_HOST_STATE_SAVED,
+                message = HOST_STATE_SAVED_MESSAGE
+            )
+        }
         try {
             keyguardManagerWrapper.authenticate(activity, fido2PromptInfo)
             val signature = signatureProvider?.invoke()
