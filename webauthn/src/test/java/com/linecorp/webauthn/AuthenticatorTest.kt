@@ -661,6 +661,51 @@ class AuthenticatorTest {
     }
 
     @Test
+    fun `a pre-flight failure survives a cleanup that fails over state it never created`() {
+        // The exclude-list check runs before key generation, and the database row is written after it, so
+        // the cleanup that follows deletes an id that was never stored. `CredentialSourceStorage.delete`
+        // is not required to be idempotent, and a consumer that rejects an unknown id used to have its
+        // InvalidStateException replaced by a DeletionException - which is the exception consumers route
+        // on to tell "already registered" apart from a real deletion fault.
+        val deleteFailure = IllegalStateException("no row for that credId")
+        val cleanupFailingDb = object : CredentialSourceStorage by mockFido2Database {
+            override fun delete(credId: String): Unit = throw deleteFailure
+        }
+        val cleanupFailingAuthenticator = Authenticator(
+            db = cleanupFailingDb,
+            authenticationHandler = mockAuthenticationHandler,
+            fido2KeyGenerator = mockKeyGenerator,
+            fido2ObjectGenerator = mockObjectGenerator,
+            authType = AuthenticatorType.BiometricAndroidKey,
+        )
+
+        runBlocking {
+            val result = cleanupFailingAuthenticator.makeCredential(
+                mockActivity,
+                dummyHash,
+                registeredRpEntity,
+                registeredUserEntity,
+                listOf(es256CredParams),
+                listOf(registeredCredDescriptor),
+                null
+            )
+
+            val e = result.exceptionOrNull()
+            assertThat(e).isInstanceOf(WebAuthnException.CoreException.InvalidStateException::class.java)
+            assertThat(e).isNotInstanceOf(WebAuthnException.DeletionException::class.java)
+            // Demoted, not dropped: the storage fault is still printed with the stack trace. Compared by
+            // type and message rather than identity, because the consumer's throwable crosses the database
+            // dispatcher and kotlinx.coroutines' stack-trace recovery copies any exception whose class
+            // declares no fields of its own - which IllegalStateException does not.
+            val suppressed = e?.suppressed?.toList()
+            assertThat(suppressed).hasSize(1)
+            assertThat(suppressed?.first()).isInstanceOf(WebAuthnException.CredSrcStorageException::class.java)
+            assertThat(suppressed?.first()?.cause).isInstanceOf(IllegalStateException::class.java)
+            assertThat(suppressed?.first()?.cause).hasMessageThat().isEqualTo(deleteFailure.message)
+        }
+    }
+
+    @Test
     fun `the key generator retries without StrongBox when the platform rejects the request`() {
         val attempts = mutableListOf<Boolean>()
         val recordingGenerator = object : Fido2KeyGenerator() {
