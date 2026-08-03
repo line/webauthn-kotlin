@@ -116,8 +116,8 @@ internal class BiometricAuthenticationHandler(
                 // the host FragmentManager to find the BiometricFragment, and that store is not
                 // synchronized, so an off-main read can race a main-thread transaction and either throw out
                 // of this handler or miss the fragment and leave the prompt on screen. Posting to the main
-                // looper also serialises the cancellation after the authenticate() call below, which a
-                // cancellation arriving before the fragment is attached would otherwise be dropped by.
+                // looper also serialises the cancellation after the authenticate() call below; a
+                // cancellation that arrives before the fragment is attached would otherwise be dropped.
                 ContextCompat.getMainExecutor(activity.applicationContext).execute {
                     biometricPrompt.cancelAuthentication()
                 }

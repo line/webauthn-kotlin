@@ -671,8 +671,9 @@ internal class Authenticator(
      * @param e The exception that occurred.
      * @param credId The credential ID related to the exception.
      * @param strongBoxRequested Whether the key was requested StrongBox-backed, for diagnostics.
-     * @param keyCommitted Whether key generation for [credId] returned. Cleanup runs either way; when it
-     * did not, a cleanup failure is carried on the original exception instead of replacing it.
+     * @param keyCommitted Whether key generation for [credId] returned. Cleanup runs either way; when key
+     * generation did not return, a cleanup failure is carried on the original exception instead of
+     * replacing it.
      * @return A failure result containing the exception.
      */
     private suspend fun handleMakeCredentialException(
@@ -728,14 +729,15 @@ internal class Authenticator(
                     )
                 )
             } else {
-                // The cleanup was defensive: no key generation ever returned for this credId, and the
+                // The cleanup here is defensive: no key generation ever returned for this credId, and the
                 // database row is written after it, so on every pre-flight failure - unsupported
-                // algorithm, exclude-list match, no usable authentication method - it deleted state that
+                // algorithm, exclude-list match, no usable authentication method - it deletes state that
                 // was never created. `CredentialSourceStorage.delete` is not required to be idempotent, so
-                // a consumer that throws for an unknown id would otherwise turn, say, a ConstraintException
-                // the caller routes to biometric enrolment into a DeletionException. Cleanup still runs,
-                // because a caller-supplied Fido2KeyGenerator can commit a key and then throw, and nothing
-                // outside this frame knows the alias; only the reported failure changes.
+                // a consumer that throws for an unknown id would otherwise turn a ConstraintException -
+                // which the caller routes to biometric enrolment - into a DeletionException. Cleanup still
+                // runs, because `keyCommitted` is only set once `generateFido2Key` has returned: a
+                // generator that reached the keystore and then threw would leave a key under an alias
+                // nothing outside this frame knows. Only the reported failure changes.
                 if (authenticatorException !== e2) {
                     authenticatorException.addSuppressed(e2)
                 }

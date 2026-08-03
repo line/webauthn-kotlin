@@ -155,8 +155,8 @@ internal class DeviceCredentialAuthenticationHandler(
                 )
 
             continuation.invokeOnCancellation {
-                // Off-main by default; see the identical hop in BiometricAuthenticationHandler for why the
-                // FragmentManager read behind cancelAuthentication() has to happen on the main looper.
+                // Runs on whichever thread cancelled; see the identical hop in BiometricAuthenticationHandler
+                // for why the FragmentManager read behind cancelAuthentication() has to be on the main looper.
                 ContextCompat.getMainExecutor(activity.applicationContext).execute {
                     biometricPrompt.cancelAuthentication()
                 }

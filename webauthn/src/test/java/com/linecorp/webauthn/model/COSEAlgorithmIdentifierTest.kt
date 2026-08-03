@@ -51,7 +51,7 @@ class COSEAlgorithmIdentifierTest {
         // The names are pinned as literals rather than resolved through a provider: the SDK targets
         // AndroidKeyStore, and the JVM the unit tests run on does not carry the same curve set (SunEC
         // dropped secp256k1 in JDK 16). A typo here surfaces only on-device as
-        // InvalidAlgorithmParameterException at key generation, which is what happened to ES512.
+        // InvalidAlgorithmParameterException at key generation; ES512 carried secp512r1 until this release.
         val curves = mapOf(
             COSEAlgorithmIdentifier.ES256 to "secp256r1",
             COSEAlgorithmIdentifier.ES384 to "secp384r1",

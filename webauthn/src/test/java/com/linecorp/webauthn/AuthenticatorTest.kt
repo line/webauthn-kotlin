@@ -665,7 +665,7 @@ class AuthenticatorTest {
         // The exclude-list check runs before key generation, and the database row is written after it, so
         // the cleanup that follows deletes an id that was never stored. `CredentialSourceStorage.delete`
         // is not required to be idempotent, and a consumer that rejects an unknown id used to have its
-        // InvalidStateException replaced by a DeletionException - which is the exception consumers route
+        // InvalidStateException replaced by a DeletionException, erasing the distinction consumers route
         // on to tell "already registered" apart from a real deletion fault.
         val deleteFailure = IllegalStateException("no row for that credId")
         val cleanupFailingDb = object : CredentialSourceStorage by mockFido2Database {
@@ -695,8 +695,8 @@ class AuthenticatorTest {
             assertThat(e).isNotInstanceOf(WebAuthnException.DeletionException::class.java)
             // Demoted, not dropped: the storage fault is still printed with the stack trace. Compared by
             // type and message rather than identity, because the consumer's throwable crosses the database
-            // dispatcher and kotlinx.coroutines' stack-trace recovery copies any exception whose class
-            // declares no fields of its own - which IllegalStateException does not.
+            // dispatcher and kotlinx.coroutines' stack-trace recovery copies any exception that declares
+            // no fields of its own, and IllegalStateException declares none.
             val suppressed = e?.suppressed?.toList()
             assertThat(suppressed).hasSize(1)
             assertThat(suppressed?.first()).isInstanceOf(WebAuthnException.CredSrcStorageException::class.java)

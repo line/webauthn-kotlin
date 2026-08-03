@@ -135,12 +135,11 @@ class AuthenticatorExceptionTest {
         assertThat(result.exceptionOrNull())
             .isInstanceOf(WebAuthnException.CoreException.InvalidStateException::class.java)
         // The exclusion is checked before any key is generated, so this pins where in the sequence the
-        // rejection happens - no key is created at all, and the failure path skips cleanup entirely
-        // rather than deleting over an alias that never existed. Either way the already registered
-        // credential survives. It is deliberately not a test of failure-path cleanup: no key material
-        // exists on this path for cleanup to miss. That property is covered by the relying-party
-        // rejection in com.linecorp.webauthn.PublicKeyCredentialEndToEndTest, where the key does get
-        // created first.
+        // rejection happens - no key is created at all - and that the cleanup which then runs over an
+        // alias that never existed does not take the already registered credential with it. It is
+        // deliberately not a test of failure-path cleanup: no key material exists on this path for cleanup
+        // to miss. That property is covered by the relying-party rejection in
+        // com.linecorp.webauthn.PublicKeyCredentialEndToEndTest, where the key does get created first.
         assertThat(keyStore.aliases().toList().toSet()).isEqualTo(aliasesAfterRegistration)
         assertThat(keyStore.containsAlias(registeredCredId)).isTrue()
         assertThat(db.load(registeredCredId)).isNotNull()
