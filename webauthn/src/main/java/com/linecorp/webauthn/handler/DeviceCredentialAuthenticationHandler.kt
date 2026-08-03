@@ -155,7 +155,11 @@ internal class DeviceCredentialAuthenticationHandler(
                 )
 
             continuation.invokeOnCancellation {
-                biometricPrompt.cancelAuthentication()
+                // Off-main by default; see the identical hop in BiometricAuthenticationHandler for why the
+                // FragmentManager read behind cancelAuthentication() has to happen on the main looper.
+                ContextCompat.getMainExecutor(activity.applicationContext).execute {
+                    biometricPrompt.cancelAuthentication()
+                }
             }
 
             if (signatureProvider != null) {
