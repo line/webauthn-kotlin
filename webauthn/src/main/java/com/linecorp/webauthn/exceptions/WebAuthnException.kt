@@ -37,6 +37,7 @@ sealed class WebAuthnException(override val message: String?, override val cause
              * status at all.
              */
             var canAuthenticateStatus: Int? = null
+                internal set
         }
         class InvalidStateException(message: String? = "The object is in an invalid state.", cause: Throwable? = null) :
             CoreException(message, cause)
@@ -63,6 +64,7 @@ sealed class WebAuthnException(override val message: String?, override val cause
              * this release the same situation left the operation suspended forever instead.
              */
             var errorCode: Int? = null
+                internal set
         }
 
         /**
@@ -105,6 +107,7 @@ sealed class WebAuthnException(override val message: String?, override val cause
         SecureExecutionException(message, cause) {
         /** `android.security.KeyStoreException.getNumericErrorCode()` when it could be read. */
         var keyStoreErrorCode: Int? = null
+            internal set
     }
     class KeyNotFoundException(message: String? = null, cause: Throwable? = null) : WebAuthnException(message, cause)
     class UnknownException(message: String, cause: Throwable? = null) : WebAuthnException(message, cause)

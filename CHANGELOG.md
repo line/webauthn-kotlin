@@ -48,7 +48,8 @@
   creation.
 - `NotAllowedException.errorCode`, `ConstraintException.canAuthenticateStatus`,
   `KeyGenerationException.keyStoreErrorCode` and `DeletionException.trigger` expose the diagnostic
-  detail the SDK previously discarded or hid.
+  detail the SDK previously discarded or hid. The first three are read-only to callers: only the SDK
+  sets them, so the value always describes the failure the exception was raised for.
 - `NotAllowedException` and `SecureExecutionException` are now `open`, which is what lets the new
   `UserCancelledException` and `KeyGenerationException` subclass them without adding a direct subclass to
   a sealed parent. No `when` over `WebAuthnException` stops being exhaustive.
