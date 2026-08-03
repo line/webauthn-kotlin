@@ -64,7 +64,7 @@
 
 ### Upgrading from 1.1.3
 
-Most of this release is internal, but ten changes are visible to callers. Four need a code change,
+Most of this release is internal, but eleven changes are visible to callers. Five need a code change,
 and one of those four stops a source upgrade from compiling.
 
 **Action required**
@@ -80,7 +80,16 @@ and one of those four stops a source upgrade from compiling.
 3. **`getAllAccounts()` returns roughly a quarter as many entries.** It previously returned every
    credential four times. Remove any de-duplication or count adjustment you added to compensate.
 
-4. **`KeyguardManagerWrapper.AuthenticationActivity.start` is no longer public.** This is the one API
+4. **`CredentialSourceStorage.delete(credId)` must honour its `credId` argument.** The interface has
+   always documented it as deleting the credential named by that id, but 1.1.3 rarely reached it on a
+   failure path: a cancelled coroutine threw before the deletion ran. 1.2.0 performs the terminal
+   cleanup under `NonCancellable` so it now runs to completion, and it also reaches cleanup on paths
+   that previously hung instead. If your implementation ignores `credId` and clears a single stored
+   slot, a cancelled registration can now delete a *different*, still-valid credential — leaving the
+   user unenrolled locally with an unnameable key stranded in the KeyStore. Check your implementation
+   before upgrading.
+
+5. **`KeyguardManagerWrapper.AuthenticationActivity.start` is no longer public.** This is the one API
    break in the release, and the only change here that stops a source upgrade from compiling. It was
    public and took a ready-made `Intent`; it is now `internal` and takes the prompt title and description
    instead, because the activity builds the confirm-device-credential `Intent` itself rather than
@@ -93,20 +102,20 @@ and one of those four stops a source upgrade from compiling.
 
 **Behaviour changes to review**
 
-5. **`deleteAllAccounts()` destroys hardware-backed key material and cannot be undone.** It previously
+6. **`deleteAllAccounts()` destroys hardware-backed key material and cannot be undone.** It previously
    deleted only the database rows and left every private key in the AndroidKeyStore. Confirm your
    "sign out and wipe" flow expects the keys to be destroyed, and that it still deregisters the
    credential at the relying party. Use the new `deleteAccount(credId)` for a single credential.
-6. **The biometric registration prompt no longer accepts Class 2 (Weak) authenticators.** Support
+7. **The biometric registration prompt no longer accepts Class 2 (Weak) authenticators.** Support
    detection already required Class 3 (Strong), so users should see no new friction, but on **Samsung
    devices running Android 9 (API 28)** the prompt switches from the framework dialog to the legacy
    fingerprint dialog, because androidx falls back for crypto-based prompts on that vendor. Those users
    already saw that dialog for authentication and for `android-key` registration, so this only makes
    `none` registration consistent with it. Re-test your registration flow there.
-7. **Adopt `PublicKeyCredential.checkAuthenticationAvailability()`** before calling `create()`. It
+8. **Adopt `PublicKeyCredential.checkAuthenticationAvailability()`** before calling `create()`. It
    reports whether authentication is possible and why not, so you can show an actionable message
    instead of handling `ConstraintException` after the fact.
-8. **On API 28/29 with `AuthenticationMethod.DeviceCredential`,
+9. **On API 28/29 with `AuthenticationMethod.DeviceCredential`,
    `WebAuthnException.AuthenticationException.KeyPermanentlyInvalidatedException` now reaches you** on
    the authentication path, where it was previously flattened into a generic authentication error. Code
    that catches only `NotAllowedException` there will see a type it has not seen before, and should
@@ -115,15 +124,25 @@ and one of those four stops a source upgrade from compiling.
    breaks.
 **Relying-party coordination**
 
-9. **Devices where StrongBox rejects key generation now produce TEE-backed keys.** If your server
+10. **Devices where StrongBox rejects key generation now produce TEE-backed keys.** If your server
    gates on the attestation security level, it will see TEE for those devices.
-10. **Both attestation formats change on the wire.** New registrations send a spec-conformant COSE
+11. **Both attestation formats change on the wire.** New registrations send a spec-conformant COSE
     credential public key — coordinates are exactly 32 bytes and the CBOR maps are definite-length — and
     for `android-key` the attestation statement's own nested map is definite-length too, so the
     attestation object's bytes differ from 1.1.3 for `none` and `android-key` alike. Credentials already
     registered are unaffected, because an assertion never carries the public key or an attestation
-    statement. Confirm your server does not assume a 33-byte coordinate, does not re-serialise the
-    stored coordinate bytes at a fixed length, and parses definite-length CBOR maps.
+    statement.
+
+    Three things change, and a server can break on any one of them independently:
+    - EC2 coordinates are now exactly 32 bytes. Do not assume 33, and do not read them with a
+      sign-aware integer constructor.
+    - The CBOR maps are definite-length rather than indefinite-length.
+    - **The top-level keys of the attestation object are reordered** from `authData, fmt, attStmt` to
+      `fmt, attStmt, authData`, because the canonical encoder sorts them. A server that reads the
+      top-level map by position rather than by key breaks on this alone, regardless of the other two.
+
+    Verify against a real registration, not by reading the parser: any standards-compliant CBOR parser
+    handles all three, but a hand-rolled or offset-based one may not.
 
 **Not fixed by this release**
 
