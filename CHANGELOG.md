@@ -54,6 +54,10 @@
   `UserCancelledException` and `KeyGenerationException` subclass them without adding a direct subclass to
   a sealed parent. No `when` over `WebAuthnException` stops being exhaustive.
 - `PublicKeyCredential.deleteAccount(credId)` removes a single credential and its key material.
+- `UserVerificationRequirement.DISCOURAGED`, the third value the WebAuthn Level 2 specification defines.
+  Without it a relying party sending `"discouraged"` could not be represented: `fromValue` returned
+  `null` and `AuthenticationOptions.userVerification` is non-null. An exhaustive `when` over this enum
+  in consumer code now needs a branch for it.
 
 ### Changed
 - `create()`/`get()` now propagate `CancellationException` instead of returning `Result.failure`.

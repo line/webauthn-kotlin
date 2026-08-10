@@ -24,6 +24,7 @@ data class AuthenticatorSelectionCriteria(
 enum class UserVerificationRequirement(val value: String) {
     REQUIRED("required"),
     PREFERRED("preferred"),
+    DISCOURAGED("discouraged"),
     ;
 
     companion object {
