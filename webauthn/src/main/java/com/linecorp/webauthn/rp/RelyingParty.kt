@@ -79,9 +79,9 @@ data class RegistrationData(
     val attestation: AttestationConveyancePreference,
     val authenticatorSelection: AuthenticatorSelectionCriteria?,
     /**
-     * MUST be the base64url (unpadded) encoding of the server's raw challenge bytes. The value is
-     * embedded verbatim as `challenge` in clientDataJSON and compared by the server during
-     * verification, so any other encoding succeeds on the device and fails server-side.
+     * MUST be the base64url (unpadded) encoding of the server's raw challenge bytes: it is embedded
+     * verbatim as `challenge` in clientDataJSON, so any other encoding succeeds on the device and then
+     * fails the server's verification.
      */
     val challenge: String,
     val excludeCredentials: List<PublicKeyCredentialDescriptor>?,

@@ -35,18 +35,13 @@ abstract class Fido2KeyGenerator {
     /**
      * Runs [generate] with StrongBox and falls back to the TEE when the platform rejects it.
      *
-     * [ProviderException] is the clause that matters: the platform raises [StrongBoxUnavailableException]
-     * only for a hardware-type-unavailable error, while every other KeyMint rejection — including the
-     * `UNIMPLEMENTED` this fallback was written for — arrives as a bare [ProviderException]. The narrower
-     * clause is a subtype of the broader one and is listed first purely to document that case; removing
-     * it would not change behaviour.
+     * The [ProviderException] clause is the one that matters: the platform raises
+     * [StrongBoxUnavailableException] only for a hardware-type-unavailable error, while every other
+     * KeyMint rejection — including the `UNIMPLEMENTED` this fallback was written for — arrives as a
+     * bare [ProviderException].
      *
      * If the retry also fails, the StrongBox failure is attached to it with `addSuppressed` so its
-     * KeyMint error code is still reachable (`Authenticator` walks `suppressed` as well as `cause`).
-     *
-     * This only helps a device that advertises StrongBox and then refuses to use it. A device that
-     * never advertised StrongBox is called with `isStrongBoxBacked == false` and has nothing to fall
-     * back to, so its failure still propagates on the first attempt.
+     * KeyMint error code stays reachable (`Authenticator` walks `suppressed` as well as `cause`).
      */
     protected fun generateWithStrongBoxFallback(
         isStrongBoxBacked: Boolean,

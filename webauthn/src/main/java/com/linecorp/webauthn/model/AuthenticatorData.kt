@@ -120,22 +120,13 @@ private fun ECPublicKey.fieldSizeInBytes(): Int = (params.curve.field.fieldSize 
 /**
  * Converts a field element to the fixed-length octet string COSE requires.
  *
- * RFC 9052/9053 section 7.1.1 defines the EC2 `x`/`y` parameters as "converted to a byte string as
- * defined in [SEC1]. Leading-zero octets MUST be preserved", and SEC1 v2.0 section 2.3.3/2.3.5 fixes
- * that length at ceil(log2(q)/8) — 32 octets for P-256.
+ * RFC 9052/9053 section 7.1.1 defines the EC2 `x`/`y` parameters as byte strings encoded per SEC1 with
+ * leading-zero octets preserved, and SEC1 v2.0 section 2.3.5 fixes that length at ceil(log2(q)/8) —
+ * 32 octets for P-256. `BigInteger.toByteArray()` is minimal-length two's-complement instead: it
+ * prepends a 0x00 sign byte when the high bit is set and strips leading zeros.
  *
- * `BigInteger.toByteArray()` is minimal-length two's-complement instead: it prepends a 0x00 sign byte
- * whenever the high bit is set (about half of all coordinates) and strips leading zeros (about 1 in 256
- * coordinates). A key carries two coordinates, so roughly three quarters of all emitted credential
- * public keys had at least one non-conformant coordinate.
- *
- * `internal` rather than private so that the padding and the rejection branches can be tested directly.
- * `EC2COSEKey(ECPublicKey)` derives [byteLength] from the same key the coordinate came from, and an
- * affine coordinate is never negative, so those branches are unreachable through the public API.
- *
- * @throws WebAuthnException.EncodingException if the value is negative or does not fit [byteLength]. A
- * wrong curve or a two's-complement value then fails loudly instead of being silently truncated, or
- * silently zero-padded into a different number.
+ * @throws WebAuthnException.EncodingException if the value is negative or does not fit [byteLength],
+ * rather than silently truncating or zero-padding it into a different number.
  */
 internal fun BigInteger.toSec1FieldElement(byteLength: Int): ByteArray {
     val minimal = toByteArray()

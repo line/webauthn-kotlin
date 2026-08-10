@@ -39,10 +39,6 @@ internal class DeviceCredentialAuthenticationHandler(
 ) : AuthenticationHandler,
     AuthenticationCapability {
 
-    /**
-     * Below API level 30 `KeyguardManager` is the only source of truth and it has no status code, so its
-     * boolean answer is mapped onto the two `BiometricManager` values that carry the same meaning.
-     */
     override fun canAuthenticateStatus(context: Context): Int = if (
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
     ) {
@@ -64,14 +60,6 @@ internal class DeviceCredentialAuthenticationHandler(
         fido2PromptInfo: Fido2PromptInfo?,
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult {
-        // Neither path can raise a prompt once the host has saved state — `isStateSaved` is
-        // `mStateSaved || mStopped`, so it also covers a stopped host — and both would hang rather than
-        // fail: androidx.biometric returns from authenticate() with no callback at all
-        // (BiometricPrompt.authenticateInternal), and on API 29 the background-activity-launch rules drop
-        // AuthenticationActivity's FLAG_ACTIVITY_NEW_TASK launch without startActivity throwing, so
-        // KeyguardManagerWrapper's own continuation never resumes either. Both leave the caller's
-        // process-wide lock held. Checked here so the caller's own dispatcher fails fast; each branch
-        // re-reads it after its hop to Main, which is the read that can actually see a late transition.
         if (activity.supportFragmentManager.isStateSaved) {
             throw AuthenticationHandler.AuthenticationErrorException(
                 errorCode = AuthenticationHandler.ERROR_HOST_STATE_SAVED,
@@ -91,11 +79,6 @@ internal class DeviceCredentialAuthenticationHandler(
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult = withContext(authHandlerDispatcher) {
         suspendCancellableCoroutine { continuation ->
-            // Re-checked one dispatch after the guard in `authenticate`: the `withContext` above hops to
-            // Dispatchers.Main, which always posts (it is not Main.immediate), so an onSaveInstanceState or
-            // onStop already sitting in the looper queue runs in between. Reading it here, on Main and in
-            // the same block as authenticate(), is the only point with nothing left to interleave — and the
-            // only read guaranteed to see the Main-thread writes to those non-volatile fields.
             if (activity.supportFragmentManager.isStateSaved) {
                 continuation.resumeWithException(
                     AuthenticationHandler.AuthenticationErrorException(
@@ -155,8 +138,6 @@ internal class DeviceCredentialAuthenticationHandler(
                 )
 
             continuation.invokeOnCancellation {
-                // Runs on whichever thread cancelled; see the identical hop in BiometricAuthenticationHandler
-                // for why the FragmentManager read behind cancelAuthentication() has to be on the main looper.
                 ContextCompat.getMainExecutor(activity.applicationContext).execute {
                     biometricPrompt.cancelAuthentication()
                 }
@@ -176,11 +157,6 @@ internal class DeviceCredentialAuthenticationHandler(
         fido2PromptInfo: Fido2PromptInfo?,
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult = withContext(authHandlerDispatcher) {
-        // Re-read on Main for the same reason as the BiometricPrompt sibling above: the withContext hop
-        // posts rather than running inline, so an onSaveInstanceState or onStop already queued on the
-        // looper runs in between the check in `authenticate` and this block. Deliberately thrown ahead of
-        // the `try`, because the terminal `catch (e: Exception)` below would wrap it and lose the
-        // ERROR_HOST_STATE_SAVED code that tells the caller the operation is retryable.
         if (activity.supportFragmentManager.isStateSaved) {
             throw AuthenticationHandler.AuthenticationErrorException(
                 errorCode = AuthenticationHandler.ERROR_HOST_STATE_SAVED,
@@ -208,44 +184,18 @@ internal class DeviceCredentialAuthenticationHandler(
                 cause = e
             )
         } catch (e: KeyPermanentlyInvalidatedException) {
-            // Must not be wrapped. `Authenticator.authenticate` has a dedicated mapping for this to
+            // Must not be wrapped. `Authenticator.authenticate` maps this to
             // `WebAuthnException.AuthenticationException.KeyPermanentlyInvalidatedException`, but its
-            // AuthenticationErrorException branch matches first, so wrapping made a condition that requires
-            // re-registration arrive as a bare NotAllowedException — indistinguishable from a user
-            // cancellation. Only this path needs the rethrow: from API 30 up, `signatureProvider()` is
-            // invoked inside `suspendCancellableCoroutine` with no catch around it, so it already propagates.
-            //
-            // These keys are time-bound (`setUserAuthenticationValidityDurationSeconds`), so
-            // `setInvalidatedByBiometricEnrollment` does not apply to them; the trigger here is the secure
-            // lock screen being removed or reset, not a new fingerprint enrolment.
-            //
-            // Deliberately not extended to `UserNotAuthenticatedException`: `Authenticator.authenticate` has
-            // no mapping for it, so rethrowing it would only turn a NotAllowedException into an
-            // UnknownException.
+            // AuthenticationErrorException branch matches first, so a wrapped one reaches the caller as a
+            // bare NotAllowedException - indistinguishable from a user cancellation, when in fact the
+            // credential needs re-registration. Not extended to `UserNotAuthenticatedException`, which has
+            // no such mapping: rethrowing it would only turn a NotAllowedException into an UnknownException.
+            // Only this path needs the rethrow: from API 30 up `signatureProvider()` runs inside
+            // `suspendCancellableCoroutine` with no catch around it.
             throw e
         } catch (e: CancellationException) {
-            // Must not be wrapped either, and for the same shape of reason as the branch above: a
-            // CancellationException is an IllegalStateException, so the terminal `catch (e: Exception)` below
-            // caught it and handed back an AuthenticationErrorException with a null errorCode, which
-            // `Authenticator.authenticate` maps to NotAllowedException. On API 28/29 with DeviceCredential —
-            // the only configuration that reaches this branch — a back press while the keyguard was showing
-            // therefore came back to the caller as `Result.failure(NotAllowedException)` from a coroutine
-            // whose scope was already dead.
-            //
-            // Not redundant with the cancellation that is already in flight, which is the tempting reason to
-            // delete this clause: a failure raised while the job is cancelling *wins* over that cancellation,
-            // because `JobSupport.getFinalRootCause` prefers the first non-CancellationException among a
-            // completing job's exceptions. So without this rethrow the rewrite is what the caller sees. Both
-            // keyguard tests in `PublicKeyCredentialTest` fail if it is removed.
-            //
-            // Only this path needs the rethrow: from API 30 up the prompt runs inside
-            // `suspendCancellableCoroutine` with no catch around it, so cancellation already propagates.
             throw e
         } catch (e: Exception) {
-            // Named for the same reason as every other unhandled-throwable site in this release: the
-            // constant message identified nothing, so an unexpected platform failure on this path - the only
-            // one taken on API 28/29 with DeviceCredential - could only be told apart two levels down the
-            // cause chain, after `Authenticator.authenticate` had already wrapped it in a NotAllowedException.
             throw AuthenticationHandler.AuthenticationErrorException(
                 message = "An unexpected error occurred: ${e::class.java.name}: ${e.message}",
                 cause = e

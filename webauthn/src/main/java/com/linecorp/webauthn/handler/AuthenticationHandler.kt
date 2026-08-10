@@ -29,20 +29,6 @@ import java.security.Signature
 interface AuthenticationHandler {
 
     companion object {
-        /**
-         * The host activity had already saved its instance state, so no prompt could be shown.
-         *
-         * Negative so it can never collide with an `androidx.biometric.BiometricPrompt.ERROR_*`
-         * constant. Distinct from a user cancellation.
-         *
-         * **Retry, do not report a failure.** Reaching a
-         * [com.linecorp.webauthn.exceptions.WebAuthnException.CoreException.NotAllowedException] with this
-         * `errorCode` means the user never saw a prompt and never declined anything: the ceremony started
-         * while the host was on its way to the background. Retry it when the host is interactive again.
-         * The alternative for this state is what the SDK used to do - suspend indefinitely, which also
-         * blocked every later `create()`/`get()` behind the shared lock - so a retryable error is the
-         * whole point of the constant.
-         */
         const val ERROR_HOST_STATE_SAVED: Int = -1
     }
 
@@ -76,10 +62,10 @@ interface AuthenticationHandler {
 }
 
 /**
- * Exposes the raw platform capability status behind [AuthenticationHandler.isSupported].
+ * Exposes the raw platform status behind [AuthenticationHandler.isSupported].
  *
- * Internal so the public [AuthenticationHandler] interface gains no members: adding one would
- * break Java implementors.
+ * A separate interface, not a member of [AuthenticationHandler]: adding one there would break every Java
+ * implementor.
  */
 internal interface AuthenticationCapability {
     fun canAuthenticateStatus(context: Context): Int

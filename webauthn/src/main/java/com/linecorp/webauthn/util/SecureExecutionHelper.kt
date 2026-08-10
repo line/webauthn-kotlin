@@ -23,9 +23,6 @@ import java.security.KeyStoreException
 import java.security.PublicKey
 import java.security.cert.X509Certificate
 
-/**
- * Helper class for secure execution
- */
 internal object SecureExecutionHelper {
     private val lock = Any()
 
@@ -42,7 +39,6 @@ internal object SecureExecutionHelper {
         }
     }
 
-    /** Deletes [keyAlias] if it exists. Unlike [deleteKey] this never throws for a missing alias. */
     fun deleteKeyIfPresent(keyAlias: String) {
         if (containAlias(keyAlias)) {
             deleteKey(keyAlias)

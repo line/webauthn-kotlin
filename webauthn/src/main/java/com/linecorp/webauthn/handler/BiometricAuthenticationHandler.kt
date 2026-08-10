@@ -30,11 +30,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
-/**
- * Message carried by every [AuthenticationHandler.ERROR_HOST_STATE_SAVED] failure, in both handlers.
- *
- * Top-level and `internal`: the public [AuthenticationHandler] interface must gain no member.
- */
 internal const val HOST_STATE_SAVED_MESSAGE =
     "Cannot show the authentication prompt: the host activity has saved its state."
 
@@ -111,13 +106,6 @@ internal class BiometricAuthenticationHandler(
                 )
 
             continuation.invokeOnCancellation {
-                // Runs on whichever thread cancelled, which for a consumer wrapping create()/get() in
-                // withTimeout on Dispatchers.IO is not the main thread. cancelAuthentication() reaches into
-                // the host FragmentManager to find the BiometricFragment, and that store is not
-                // synchronized, so an off-main read can race a main-thread transaction and either throw out
-                // of this handler or miss the fragment and leave the prompt on screen. Posting to the main
-                // looper also serialises the cancellation after the authenticate() call below; a
-                // cancellation that arrives before the fragment is attached would otherwise be dropped.
                 ContextCompat.getMainExecutor(activity.applicationContext).execute {
                     biometricPrompt.cancelAuthentication()
                 }
@@ -132,15 +120,6 @@ internal class BiometricAuthenticationHandler(
         }
     }
 
-    /**
-     * Builds the prompt configuration.
-     *
-     * `setAllowedAuthenticators` must be explicit: with it unset, androidx derives
-     * `crypto != null ? BIOMETRIC_STRONG : BIOMETRIC_WEAK`
-     * (`AuthenticatorUtils.getConsolidatedAuthenticators`). `AttestationStatementFormat.NONE` passes no
-     * signature provider and therefore no `CryptoObject`, so registration would run a Class 2 (Weak)
-     * capable prompt while [isSupported] gates on Class 3 (Strong) and the generated key requires it.
-     */
     internal fun buildPromptInfo(fido2PromptInfo: Fido2PromptInfo?): BiometricPrompt.PromptInfo =
         BiometricPrompt.PromptInfo.Builder()
             .setTitle(fido2PromptInfo?.title ?: "Biometric Authentication")

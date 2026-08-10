@@ -35,11 +35,7 @@ class Fido2Util {
          * The calling package's facet ID, as used for the `origin` of the collected client data.
          *
          * The returned string is part of the signed `clientDataJSON` that the relying party verifies, so
-         * neither the hash nor the encoding may change. Only the failure behaviour did: the signing
-         * information used to be dereferenced with `!!`, which surfaced a missing or unsigned package as a
-         * raw `NullPointerException` — or, for an empty signer array, an
-         * `ArrayIndexOutOfBoundsException` — from a function documented to throw
-         * [WebAuthnException.UtilityException].
+         * neither the hash nor the encoding may change.
          *
          * This does a PackageManager binder round trip, an X.509 parse and a SHA-256, so callers run it off
          * the main thread.
@@ -74,12 +70,6 @@ class Fido2Util {
                 Base64.encodeToString(hash, Base64.DEFAULT or Base64.NO_WRAP or Base64.NO_PADDING)
         }
 
-        /**
-         * The first APK contents signer of [signingInfo], which is the certificate the facet ID hashes.
-         *
-         * Shared by both API branches of [getPackageFacetID] so that they cannot drift apart; the value
-         * returned is the same one the two `!!` dereferences used to produce.
-         */
         private fun firstApkContentsSigner(signingInfo: SigningInfo?): ByteArray {
             if (signingInfo == null) {
                 throw WebAuthnException.UtilityException("No signing info available for the calling package.")

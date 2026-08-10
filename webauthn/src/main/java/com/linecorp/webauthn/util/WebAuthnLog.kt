@@ -22,14 +22,11 @@ import com.linecorp.webauthn.BuildConfig
 /**
  * Debug logging for the SDK's own use.
  *
- * Gated on [BuildConfig.DEBUG] because the published AAR is built with `minifyEnabled false` and a
- * consumer's R8 will not strip `Log.d` without an explicit `-assumenosideeffects` rule, so ungated
- * calls ship enabled. The AAR is assembled from the release variant, where `DEBUG` is false, so
- * nothing here reaches a consumer's logcat; a debug build of this library keeps the output.
+ * Gated on [BuildConfig.DEBUG] because the published AAR ships unminified and a consumer's R8 will not
+ * strip `Log.d` without an explicit `-assumenosideeffects` rule.
  *
- * Nothing derived from user input, credential material, or a relying party's data may be passed
- * here: logcat is readable by the shell user on a developer device and by the app's own crash
- * reporters.
+ * Never pass user input, credential material, or relying-party data: logcat is readable by the shell user
+ * and by the app's own crash reporters.
  */
 internal object WebAuthnLog {
     private const val TAG = "WebAuthn"

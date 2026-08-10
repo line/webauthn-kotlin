@@ -102,23 +102,16 @@ class KeyguardManagerWrapper {
                 try {
                     context.startActivity(activityIntent)
                 } catch (e: Throwable) {
-                    // Nothing can deliver a result now, so release the slot instead of leaving the
-                    // callback and the continuation it captures parked in a static field.
                     clearCallback(callback)
                     throw e
                 }
             }
 
-            /**
-             * Clears [callback] only if it is still the installed one, so a flow can never strip the
-             * callback that a later flow installed and leave that flow unresolved.
-             */
             @JvmSynthetic
             internal fun clearCallback(callback: (Boolean, Int?) -> Unit) {
                 callbackRef.compareAndSet(callback, null)
             }
 
-            /** Takes the callback so it can only ever fire once. */
             private fun takeCallback(): ((Boolean, Int?) -> Unit)? = callbackRef.getAndSet(null)
         }
 
@@ -140,8 +133,6 @@ class KeyguardManagerWrapper {
                 finish()
                 return
             }
-            // The prompt title and description come from the consumer's Fido2PromptInfo, so neither is
-            // logged; only the fact that the system prompt was launched.
             WebAuthnLog.d("Launching the confirm-device-credential prompt.")
             startActivityForResult(confirmIntent, REQUEST_CODE_CONFIRM_DEVICE_CREDENTIAL)
         }

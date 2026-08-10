@@ -38,11 +38,8 @@ data class AttestationObject(val authData: ByteArray, val fmt: String, val attSt
 
     /**
      * Overrides the interface default so that [canonical] reaches the nested `attStmt` map as well as
-     * the top-level one. This is the only implementation of [CborSerializable] that nests a map, so it
-     * is the only one that needs to; overriding here rather than adding a member to [CborSerializable]
-     * keeps that interface's member set unchanged, which a new Kotlin interface default would not,
-     * because it also introduces an abstract JVM interface method that a Java implementor would have to
-     * implement.
+     * the top-level one; this is the only [CborSerializable] that nests a map. A new member on that
+     * interface would instead add an abstract JVM method every Java implementor would have to implement.
      */
     override fun toCBOR(canonical: Boolean): ByteArray {
         if (canonical) {
@@ -51,16 +48,11 @@ data class AttestationObject(val authData: ByteArray, val fmt: String, val attSt
         return encodeToCborBytes { putEntries(CborBuilder().startMap(), nestDefiniteLength = false) }
     }
 
-    /**
-     * @param nestDefiniteLength Selects the `attStmt` map form. False reproduces the pre-1.2.0 bytes,
-     * where every format except `none` nested an indefinite-length map.
-     */
     private fun <T : AbstractBuilder<*>?> putEntries(builder: MapBuilder<T>, nestDefiniteLength: Boolean): T {
         builder.put("authData", authData)
         builder.put("fmt", fmt)
         if (fmt == AttestationStatementFormat.NONE.value) {
-            // An empty attStmt has always been written definite-length, so this branch does not switch:
-            // putMap here is the pre-1.2.0 behaviour as well as the conformant one.
+            // An empty attStmt is definite-length in both forms, so this branch ignores nestDefiniteLength.
             builder.putMap("attStmt")
         } else if (nestDefiniteLength) {
             attStmt.toCBOR(builder.putMap("attStmt"))

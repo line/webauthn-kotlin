@@ -100,8 +100,6 @@ class PublicKeyCredential(
             context: Context,
             authenticationMethod: AuthenticationMethod
         ): AuthenticationAvailability {
-            // Typed explicitly: the least upper bound of the two concrete handlers is not
-            // AuthenticationCapability, so inference would not find canAuthenticateStatus.
             val handler: AuthenticationCapability = when (authenticationMethod) {
                 AuthenticationMethod.Biometric -> BiometricAuthenticationHandler()
                 AuthenticationMethod.DeviceCredential -> DeviceCredentialAuthenticationHandler()
@@ -109,13 +107,9 @@ class PublicKeyCredential(
             return try {
                 AuthenticationAvailability.fromStatus(handler.canAuthenticateStatus(context))
             } catch (e: Exception) {
-                // The whole point of this API is to answer instead of failing, so a platform query that
-                // throws must not surface as an exception to a caller who is trying to avoid one. Below
-                // API 30 the device-credential path reaches `KeyguardManager` through an unchecked cast,
-                // so a device with no keyguard service would otherwise propagate a raw platform throwable.
-                // UNKNOWN rather than NO_HARDWARE: we caught an arbitrary failure, so we genuinely could
-                // not determine availability, and NO_HARDWARE would name a device capability we never
-                // observed. This is also the only case in which `status` is null.
+                // Below API 30 the device-credential path reaches KeyguardManager through an unchecked
+                // cast, so a device with no keyguard service throws here. UNKNOWN rather than NO_HARDWARE:
+                // an arbitrary failure is not an observation about the device's hardware.
                 AuthenticationAvailability(
                     isAvailable = false,
                     status = null,
@@ -187,9 +181,7 @@ class PublicKeyCredential(
                     rpClient.verifyRegistration(createResult)
                 }
             } catch (e: CancellationException) {
-                // Deliberately no cleanup: the credential is fully registered on the device at this point,
-                // so its row names the key and deleteAccount can still remove it. Deleting it here would
-                // also be a guess about a verification whose outcome the caller never learned.
+                // No cleanup: the credential is fully registered here, so deleteAccount can still remove it.
                 throw e
             } catch (e: Throwable) {
                 val rpException = WebAuthnException.RpException(
@@ -200,10 +192,9 @@ class PublicKeyCredential(
                 try {
                     authenticator.retryCleanup(createResult.id, maxTries = 2, delayMillis = 1000)
                 } catch (e2: CancellationException) {
-                    // Only the cancellable wait between cleanup attempts can land here, so the key deletion
-                    // has already run once. The relying-party failure that triggered it rides along, so it
-                    // still appears in a printed stack trace instead of being replaced by a DeletionException
-                    // that blames the SDK for the caller's teardown.
+                    // Only the delay between cleanup attempts is cancellable, so the key deletion already
+                    // ran once. The relying-party failure rides along as a suppressed exception rather than
+                    // being replaced by a DeletionException.
                     e2.addSuppressed(rpException)
                     throw e2
                 } catch (e2: Throwable) {
@@ -280,12 +271,7 @@ class PublicKeyCredential(
     /**
      * Runs [block] and captures its failure in a [Result], except cancellation.
      *
-     * `runCatching` catches [Throwable], so it swallows the [CancellationException] that a cancelled scope
-     * raises at the next suspension point and hands the caller a `Result.failure` instead. That breaks
-     * structured concurrency twice over: the caller's coroutine is already dead, and the SDK reports a
-     * business error - in practice `RpException`, because the innermost `catch` around the relying-party
-     * call rewrote it - for what is a back press or a destroyed host. Consuming apps then log and count that
-     * as a relying-party fault.
+     * `runCatching` catches [Throwable], so it would turn a cancelled scope into a `Result.failure`.
      */
     private inline fun <T> runCatchingCancellable(block: () -> T): Result<T> = try {
         Result.success(block())
@@ -320,17 +306,12 @@ class PublicKeyCredential(
      * This is irreversible: the private keys cannot be recovered, and a credential that is still
      * registered at the relying party has to be deregistered there separately.
      *
-     * Deletion is best effort. Every credential is attempted even when an earlier one fails, so a single
-     * unusable credential cannot strand the rest of the batch; the first failure is then rethrown with any
-     * later ones attached to it as suppressed exceptions.
+     * Deletion is best effort: every credential is attempted even when an earlier one fails, and the first
+     * failure is rethrown with any later ones attached to it as suppressed exceptions.
      *
-     * A credential whose key could not be deleted deliberately **keeps its database row**, because that
-     * row is the only record of the KeyStore alias: dropping it would leave behind a private key that can
-     * never be named, and so never deleted, again. The consequence is that such a credential is still
-     * listed by [getAllAccounts] and that every later call to this function fails on it again. Nothing this
-     * API offers can remove it while the key deletion keeps failing — but the
-     * [com.linecorp.webauthn.db.CredentialSourceStorage] implementation belongs to you, so if you decide to
-     * abandon the key you can delete the row through it directly.
+     * A credential whose key could not be deleted keeps its database row, since that row is the only record
+     * of the KeyStore alias, so it stays listed by [getAllAccounts] and fails here again on every later
+     * call. See [deleteAccount] for how to abandon such a key.
      *
      * @throws WebAuthnException.CredSrcStorageException If the credentials could not be loaded, or a row
      * could not be deleted.
@@ -349,9 +330,8 @@ class PublicKeyCredential(
             }
         }
         failures.firstOrNull()?.let { firstFailure ->
-            // Identity-checked: addSuppressed throws IllegalArgumentException for self-suppression, which
-            // would replace the documented failure with an undocumented one. Two credentials can genuinely
-            // fail with one instance - a stubbed or cached exception, or a singleton from a storage layer.
+            // addSuppressed throws IllegalArgumentException on self-suppression, and one exception instance
+            // can come back for several credentials (a cached or stubbed throwable from the storage layer).
             failures.drop(1).forEach { if (it !== firstFailure) firstFailure.addSuppressed(it) }
             throw firstFailure
         }
@@ -366,10 +346,9 @@ class PublicKeyCredential(
      * @param credId The credential id as returned by [getAllAccounts], which is also the KeyStore alias of
      * the credential's private key.
      * @throws WebAuthnException.SecureExecutionException If the key material could not be deleted. The
-     * database row is deliberately kept in that case, since it is the only record of the KeyStore alias, so
-     * the credential stays nameable and every later call for this [credId] fails the same way until the key
-     * deletion succeeds. The [com.linecorp.webauthn.db.CredentialSourceStorage] implementation is yours: if
-     * you decide to abandon the key, delete the row through it directly.
+     * database row is kept in that case, since it is the only record of the KeyStore alias, so every later
+     * call for this [credId] fails the same way until the key deletion succeeds. To abandon the key instead,
+     * delete the row through your own [com.linecorp.webauthn.db.CredentialSourceStorage].
      * @throws WebAuthnException.CredSrcStorageException If the database row could not be deleted.
      */
     suspend fun deleteAccount(credId: String) {
@@ -380,15 +359,11 @@ class PublicKeyCredential(
     /**
      * An [Authenticator] used only to reach shared state, with no prompt attached.
      *
-     * The credential storage is a single consumer-supplied instance shared by every authenticator type, so
-     * any authenticator reaches every stored credential. The account-management APIs above used to loop
-     * over all four [AuthenticationMethod] x [AttestationStatementFormat] combinations and call the
-     * unfiltered `loadAll()` once per combination, which returned every credential four times and ran
-     * every deletion four times.
+     * The credential storage is one consumer-supplied instance shared by every authenticator type, so any
+     * authenticator reaches every stored credential, and one instance is enough for the account APIs above.
      *
-     * `loadAll()` stays unfiltered rather than passing `authType.aaguid`: filtering would silently hide
-     * rows whose aaguid is not one of the four [com.linecorp.webauthn.model.AuthenticatorType] values, and
-     * a storage implementation that ignores the parameter would still return every row per iteration.
+     * `loadAll()` stays unfiltered: passing `authType.aaguid` would hide rows whose aaguid is not one of the
+     * [com.linecorp.webauthn.model.AuthenticatorType] values.
      */
     private fun anyAuthenticator(): Authenticator = authenticatorProvider.getAuthenticator(
         authenticationMethod = authenticationMethod,
@@ -418,8 +393,6 @@ class PublicKeyCredential(
 
             val credTypesAndPubKeyAlgs = processCredTypesAndPubKeyAlgs(options)
 
-            // Off the caller's dispatcher for the reason spelled out in [publicKeyCredentialGet]; the string
-            // itself is unchanged.
             val origin = withContext(Dispatchers.IO) {
                 Fido2Util.getPackageFacetID(activity.applicationContext)
             }
@@ -464,10 +437,6 @@ class PublicKeyCredential(
             if (e is WebAuthnException) {
                 throw e
             } else {
-                // `$e` renders as "java.lang.IllegalStateException: no signing info" only when the message is
-                // non-null; a message-less throwable printed as its class name alone with no indication that
-                // that was all there was. Naming the class and the message separately keeps both halves
-                // legible, and matches the sibling in `publicKeyCredentialGet`.
                 throw WebAuthnException.UnknownException(
                     "Unhandled ${e::class.java.name} while creating public key credential: ${e.message}",
                     e
@@ -494,9 +463,8 @@ class PublicKeyCredential(
         fido2PromptInfo: Fido2PromptInfo? = null
     ): PublicKeyCredentialGetResult {
         try {
-            // Off the caller's dispatcher: a PackageManager binder round trip, an X.509 parse and a SHA-256,
-            // on every single operation. `create` does the same, and the string is unchanged - it is the
-            // `origin` inside the signed clientDataJSON that the relying party verifies byte for byte.
+            // Off the caller's dispatcher: a PackageManager binder round trip, an X.509 parse and a SHA-256
+            // on every operation.
             val origin = withContext(Dispatchers.IO) {
                 Fido2Util.getPackageFacetID(activity.applicationContext)
             }
@@ -537,10 +505,6 @@ class PublicKeyCredential(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // The `create` sibling has always normalised here; this one did not, so anything the platform
-            // raised outside the authenticator - a PackageManager.NameNotFoundException, a package with no
-            // signers - reached the caller as a raw non-WebAuthnException in Result.failure, contradicting
-            // the @throws contract above and falling through consumer `when (e)` blocks to a generic error.
             if (e is WebAuthnException) {
                 throw e
             }
@@ -552,12 +516,12 @@ class PublicKeyCredential(
     }
 
     /**
-     * The user handle must be 1..64 **bytes** per WebAuthn Level 2. `user.id` carries it as base64url,
-     * so counting characters capped it at 48 bytes and rejected spec-legal 49..64-byte handles.
+     * The user handle must be 1..64 **bytes** per WebAuthn Level 2 and `user.id` carries it as base64url,
+     * so the length is measured after decoding.
      *
-     * A value that is not valid base64url falls back to the previous character-count check rather than
-     * failing: rejecting it outright would turn a working integration into 100% registration failure on
-     * upgrade. Passing a non-base64url id is unsupported and will be rejected in a future release.
+     * A value that is not valid base64url falls back to its character count rather than being rejected, so
+     * that an existing integration does not start failing every registration on upgrade. Non-base64url ids
+     * are unsupported and will be rejected in a future release.
      */
     private fun validateUserHandle(userId: String) {
         val decodedSize = try {

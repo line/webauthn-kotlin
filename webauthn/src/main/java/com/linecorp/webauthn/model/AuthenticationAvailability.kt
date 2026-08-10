@@ -22,16 +22,15 @@ import androidx.biometric.BiometricManager
  * Whether the device can currently perform the SDK's user authentication, and why not if it cannot.
  *
  * Obtain one from [com.linecorp.webauthn.publickeycredential.PublicKeyCredential.checkAuthenticationAvailability]
- * and use it to gate your UI before calling `create()`. Doing so avoids the
- * [com.linecorp.webauthn.exceptions.WebAuthnException.CoreException.ConstraintException] that
- * `create()` otherwise throws, which is not a fault worth reporting as an error.
+ * and use it to gate your UI before calling `create()`, which otherwise throws
+ * [com.linecorp.webauthn.exceptions.WebAuthnException.CoreException.ConstraintException].
  *
  * @property isAvailable True when authentication can proceed right now.
  * @property status The `BiometricManager.canAuthenticate()` status where the platform provides one. On API
- * levels below 30 with [AuthenticationMethod.DeviceCredential] there is no such call, so this is a value the
- * SDK derives from `KeyguardManager.isDeviceSecure` (`BIOMETRIC_SUCCESS` or `BIOMETRIC_ERROR_NONE_ENROLLED`)
- * to match the status androidx itself reports for that combination on API 30 and above. Null only when the
- * availability query itself failed, in which case [reason] is [Reason.UNKNOWN].
+ * levels below 30 with [AuthenticationMethod.DeviceCredential] there is no such call, so the SDK derives one
+ * from `KeyguardManager.isDeviceSecure` (`BIOMETRIC_SUCCESS` or `BIOMETRIC_ERROR_NONE_ENROLLED`) to match
+ * what androidx reports for that combination on API 30 and above. Null only when the availability query
+ * itself failed, in which case [reason] is [Reason.UNKNOWN].
  * @property reason A stable classification of [status].
  */
 @ConsistentCopyVisibility
@@ -51,11 +50,9 @@ data class AuthenticationAvailability internal constructor(
         /**
          * The platform reports no authenticator of the required class.
          *
-         * Usually the device really has none, but do **not** persist this as "permanently unsupported".
-         * androidx also returns it on API 28 for a device whose only biometric is face - Class 3 is not
-         * queryable there - and whenever `KeyguardManager` is unavailable. A cached verdict would then
-         * keep the feature hidden after an OS upgrade or a system-service recovery that made
-         * authentication work. Re-query before each ceremony instead; the call is cheap.
+         * Do **not** cache this as permanently unsupported: androidx also returns it on API 28 for a
+         * device whose only biometric is face - Class 3 is not queryable there - and whenever
+         * `KeyguardManager` is unavailable. Re-query before each ceremony.
          */
         NO_HARDWARE,
 
