@@ -1,6 +1,6 @@
 # Change Log
 
-## 1.2.0 (2026-07-31)
+## 1.2.0 (2026-08-29)
 
 ### Fixed
 - `cleanup()` deleted a re-encoded key alias, so no key the SDK created was ever removed. Failed
@@ -13,12 +13,12 @@
 - `KeyPermanentlyInvalidatedException` was reported as a generic authentication error on API 28/29
   device-credential authentication.
 - `get()` could fail with a non-`WebAuthnException`, contradicting its documented contract.
-- Key generation that requested StrongBox and was rejected by the platform keystore — whether for
-  StrongBox unavailability or for any other reason — is now retried without StrongBox instead of failing
+- Key generation that requested StrongBox and was rejected by the platform keystore - whether for
+  StrongBox unavailability or for any other reason - is now retried without StrongBox instead of failing
   outright. Key generation that did not request StrongBox is unchanged: it is still attempted once.
 - The biometric registration prompt allowed Class 2 (Weak) authenticators while support detection and
   the generated key both required Class 3 (Strong).
-- `user.id` length is validated in bytes when the value decodes as base64url, so spec-legal 49–64 byte
+- `user.id` length is validated in bytes when the value decodes as base64url, so spec-legal 49-64 byte
   user handles are accepted. A value that is not valid base64url still falls back to the previous
   character count.
 - AndroidKeyStore work no longer runs on the caller's thread, with one deliberate exception: the
@@ -84,7 +84,7 @@ and one of those four stops a source upgrade from compiling.
 1. **`create()` and `get()` now throw `CancellationException`** instead of returning
    `Result.failure`. If you bridge these calls to a callback, RxJava, or `runBlocking` boundary, let
    `CancellationException` propagate rather than catching `Throwable`. Note that
-   `result.onFailure { showError() }` no longer fires when the user leaves the screen mid-ceremony —
+   `result.onFailure { showError() }` no longer fires when the user leaves the screen mid-ceremony -
    previously it did, and reported a relying-party error.
 2. **Catch `WebAuthnException.CoreException.UserCancelledException` before `NotAllowedException`** and
    do not report it as an error. A user dismissing the prompt is a normal outcome. Without this change
@@ -97,7 +97,7 @@ and one of those four stops a source upgrade from compiling.
    failure path: a cancelled coroutine threw before the deletion ran. 1.2.0 performs the terminal
    cleanup under `NonCancellable` so it now runs to completion, and it also reaches cleanup on paths
    that previously hung instead. If your implementation ignores `credId` and clears a single stored
-   slot, a cancelled registration can now delete a *different*, still-valid credential — leaving the
+   slot, a cancelled registration can now delete a *different*, still-valid credential - leaving the
    user unenrolled locally with an unnameable key stranded in the KeyStore. Check your implementation
    before upgrading.
 
@@ -139,7 +139,7 @@ and one of those four stops a source upgrade from compiling.
 10. **Devices where StrongBox rejects key generation now produce TEE-backed keys.** If your server
    gates on the attestation security level, it will see TEE for those devices.
 11. **Both attestation formats change on the wire.** New registrations send a spec-conformant COSE
-    credential public key — coordinates are exactly 32 bytes and the CBOR maps are definite-length — and
+    credential public key - coordinates are exactly 32 bytes and the CBOR maps are definite-length - and
     for `android-key` the attestation statement's own nested map is definite-length too, so the
     attestation object's bytes differ from 1.1.3 for `none` and `android-key` alike. Credentials already
     registered are unaffected, because an assertion never carries the public key or an attestation
@@ -161,9 +161,9 @@ and one of those four stops a source upgrade from compiling.
 - **Keys already orphaned on users' devices are not recovered.** A pre-1.2.0 registration that failed
   after key generation left a private key in the AndroidKeyStore with no database row naming it; those
   keys are still there after upgrading. Recovering them would mean enumerating every AndroidKeyStore
-  alias and deleting the ones absent from your `CredentialSourceStorage` — a destructive sweep over a
+  alias and deleting the ones absent from your `CredentialSourceStorage` - a destructive sweep over a
   keystore this SDK does not exclusively own, which could delete keys belonging to your app or to
-  another library — so it is deliberately out of scope. The fixes above stop new orphans from being
+  another library - so it is deliberately out of scope. The fixes above stop new orphans from being
   created; the existing ones are inert and occupy a keystore slot each.
 
 ## 1.1.3 (2025-09-16)

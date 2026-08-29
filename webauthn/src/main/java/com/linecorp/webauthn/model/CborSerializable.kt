@@ -31,8 +31,8 @@ interface CborSerializable {
      *
      * @param canonical When true (the default) the map is definite-length, which WebAuthn Level 2
      * section 2.4 requires via the CTAP2 canonical CBOR encoding form. `CborEncoder` is canonical by
-     * default, so it additionally sorts map keys per RFC 7049 section 3.9 — shorter encoded key first,
-     * then bytewise — which is not CTAP2's rule (that also sorts a lower major type first), but the two
+     * default, so it additionally sorts map keys per RFC 7049 section 3.9 - shorter encoded key first,
+     * then bytewise - which is not CTAP2's rule (that also sorts a lower major type first), but the two
      * coincide for every map this SDK emits: the attestation object's keys are all text strings, and the
      * COSE labels 1, 3, -1, -2, -3 encode to 01 03 20 21 22. When false the indefinite-length form is
      * emitted; that is a diagnostic switch, not reachable from any public API.

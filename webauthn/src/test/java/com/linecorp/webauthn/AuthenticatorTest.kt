@@ -580,7 +580,7 @@ class AuthenticatorTest {
     @Test
     fun `a keystore rejection reachable only through suppressed is still recognised`() {
         // The shape `generateWithStrongBoxFallback` produces when the TEE retry fails with something that
-        // is not itself a keystore rejection: the StrongBox failure — the one carrying the KeyMint code —
+        // is not itself a keystore rejection: the StrongBox failure - the one carrying the KeyMint code -
         // rides on `suppressed`, not on `cause`. A cause-only classifier would miss it.
         val strongBoxFailure = java.security.ProviderException("Failed to generate key pair.")
         val retryFailure = IllegalStateException("retry failed").apply { addSuppressed(strongBoxFailure) }
@@ -839,15 +839,15 @@ class AuthenticatorTest {
         assertThat(deletedAliases).containsExactly(registeredCredId)
         // The regression this pins down: `credId` is already base64url and `makeCredential` uses it
         // verbatim as the KeyStore alias, so encoding it a second time names an alias no key was ever
-        // stored under — and `KeyStore.deleteEntry` no-ops silently on a missing alias, so cleanup
+        // stored under - and `KeyStore.deleteEntry` no-ops silently on a missing alias, so cleanup
         // reported success while leaving the private key behind.
         val doubleEncoded = registeredCredId.toBase64url()
         assertThat(deletedAliases).doesNotContain(doubleEncoded)
         // These two are the part that can fail independently of the assertion above, because they are
         // statements about `Encoding.kt` rather than about the captured list: the `ByteArray` and `String`
         // overloads of `toBase64url` must keep producing different aliases for 43 and 58 characters
-        // respectively. Were `String.toBase64url` ever "fixed" into a passthrough — the wrong file to
-        // change — the old double-encoding call site would satisfy every assertion above it while the
+        // respectively. Were `String.toBase64url` ever "fixed" into a passthrough - the wrong file to
+        // change - the old double-encoding call site would satisfy every assertion above it while the
         // defect went unnoticed.
         assertThat(registeredCredId).hasLength(43)
         assertThat(doubleEncoded).hasLength(58)

@@ -121,7 +121,7 @@ private fun ECPublicKey.fieldSizeInBytes(): Int = (params.curve.field.fieldSize 
  * Converts a field element to the fixed-length octet string COSE requires.
  *
  * RFC 9052/9053 section 7.1.1 defines the EC2 `x`/`y` parameters as byte strings encoded per SEC1 with
- * leading-zero octets preserved, and SEC1 v2.0 section 2.3.5 fixes that length at ceil(log2(q)/8) —
+ * leading-zero octets preserved, and SEC1 v2.0 section 2.3.5 fixes that length at ceil(log2(q)/8) -
  * 32 octets for P-256. `BigInteger.toByteArray()` is minimal-length two's-complement instead: it
  * prepends a 0x00 sign byte when the high bit is set and strips leading zeros.
  *

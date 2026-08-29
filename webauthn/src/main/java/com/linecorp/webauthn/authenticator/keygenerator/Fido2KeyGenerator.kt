@@ -37,7 +37,7 @@ abstract class Fido2KeyGenerator {
      *
      * The [ProviderException] clause is the one that matters: the platform raises
      * [StrongBoxUnavailableException] only for a hardware-type-unavailable error, while every other
-     * KeyMint rejection — including the `UNIMPLEMENTED` this fallback was written for — arrives as a
+     * KeyMint rejection - including the `UNIMPLEMENTED` this fallback was written for - arrives as a
      * bare [ProviderException].
      *
      * If the retry also fails, the StrongBox failure is attached to it with `addSuppressed` so its

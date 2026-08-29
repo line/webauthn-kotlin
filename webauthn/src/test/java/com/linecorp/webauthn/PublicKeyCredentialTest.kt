@@ -198,7 +198,7 @@ class PublicKeyCredentialTest {
         mockDb.removeAllData()
         // Object mocks are JVM-wide and the whole module's tests share one JVM. A stubbed
         // SecureExecutionHelper leaking out of this class would reach AuthenticatorTest, whose
-        // generateUniqueCredId loops until containAlias is false — that hangs the suite instead of
+        // generateUniqueCredId loops until containAlias is false - that hangs the suite instead of
         // failing it. Unmocking here rather than at the end of each test also survives an assertion
         // failure part-way through one.
         unmockkObject(SecureExecutionHelper)
