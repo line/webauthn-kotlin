@@ -77,7 +77,7 @@
 ### Upgrading from 1.1.3
 
 Most of this release is internal, but eleven changes are visible to callers. Five need a code change,
-and one of those four stops a source upgrade from compiling.
+and one of those five stops a source upgrade from compiling.
 
 **Action required**
 
