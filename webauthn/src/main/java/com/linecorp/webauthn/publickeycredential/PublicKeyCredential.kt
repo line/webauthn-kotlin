@@ -16,12 +16,17 @@
 
 package com.linecorp.webauthn.publickeycredential
 
+import android.content.Context
 import androidx.fragment.app.FragmentActivity
 import com.linecorp.webauthn.authenticator.Authenticator
 import com.linecorp.webauthn.authenticator.AuthenticatorProvider
 import com.linecorp.webauthn.db.CredentialSourceStorage
 import com.linecorp.webauthn.exceptions.WebAuthnException
+import com.linecorp.webauthn.handler.AuthenticationCapability
+import com.linecorp.webauthn.handler.BiometricAuthenticationHandler
+import com.linecorp.webauthn.handler.DeviceCredentialAuthenticationHandler
 import com.linecorp.webauthn.model.AttestationStatementFormat
+import com.linecorp.webauthn.model.AuthenticationAvailability
 import com.linecorp.webauthn.model.AuthenticationMethod
 import com.linecorp.webauthn.model.AuthenticatorAssertionResponse
 import com.linecorp.webauthn.model.AuthenticatorAttestationResponse
@@ -43,8 +48,10 @@ import com.linecorp.webauthn.rp.RegistrationData
 import com.linecorp.webauthn.rp.RegistrationOptions
 import com.linecorp.webauthn.rp.RelyingParty
 import com.linecorp.webauthn.util.Fido2Util
+import com.linecorp.webauthn.util.base64urlToByteArray
 import com.linecorp.webauthn.util.toBase64url
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -76,12 +83,56 @@ class PublicKeyCredential(
          * Mutex to ensure that create and get operations are thread-safe.
          */
         private val mutex = Mutex()
+
+        /**
+         * Reports whether [authenticationMethod] can be used on this device right now.
+         *
+         * Call this before [create] to gate your UI. `create()` throws
+         * [WebAuthnException.CoreException.ConstraintException] when authentication is unavailable,
+         * which is an expected device state rather than an error worth reporting.
+         *
+         * This function does not throw. If the platform query itself fails, the result is
+         * [AuthenticationAvailability.Reason.UNKNOWN] with a null
+         * [AuthenticationAvailability.status].
+         */
+        @JvmStatic
+        fun checkAuthenticationAvailability(
+            context: Context,
+            authenticationMethod: AuthenticationMethod
+        ): AuthenticationAvailability {
+            val handler: AuthenticationCapability = when (authenticationMethod) {
+                AuthenticationMethod.Biometric -> BiometricAuthenticationHandler()
+                AuthenticationMethod.DeviceCredential -> DeviceCredentialAuthenticationHandler()
+            }
+            return try {
+                AuthenticationAvailability.fromStatus(handler.canAuthenticateStatus(context))
+            } catch (e: Exception) {
+                // Below API 30 the device-credential path reaches KeyguardManager through an unchecked
+                // cast, so a device with no keyguard service throws here. UNKNOWN rather than NO_HARDWARE:
+                // an arbitrary failure is not an observation about the device's hardware.
+                AuthenticationAvailability(
+                    isAvailable = false,
+                    status = null,
+                    reason = AuthenticationAvailability.Reason.UNKNOWN
+                )
+            }
+        }
     }
 
     internal lateinit var authenticator: Authenticator
 
     /**
      * Initiates the registration process for a new credential.
+     *
+     * Cancellation is not a result. If the calling coroutine's scope is cancelled - a back press, a
+     * destroyed host, a timeout - this function completes with a [CancellationException] rather than a
+     * `Result.failure`, so the cancellation stays a cancellation instead of arriving at your error handling
+     * as a relying-party or deletion failure.
+     *
+     * Key material that an interrupted registration had already created is deleted before this function
+     * returns. A credential that was already registered on the device when the cancellation arrived is kept
+     * instead, since it is complete and [getAllAccounts] lists it; whether the relying party accepted it is
+     * unknown, and [deleteAccount] removes it.
      *
      * @param activity The activity context used for UI operations.
      * @param options The registration options provided by the relying party.
@@ -96,11 +147,13 @@ class PublicKeyCredential(
         options: RegistrationOptions,
         fido2PromptInfo: Fido2PromptInfo? = null
     ): Result<Unit> = mutex.withLock {
-        runCatching {
+        runCatchingCancellable {
             val registrationData: RegistrationData = try {
                 withContext(relyingPartyDispatcher) {
                     rpClient.getRegistrationData(options)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 throw WebAuthnException.RpException(
                     "Error occurred while getting registration data from rp: $e",
@@ -127,6 +180,9 @@ class PublicKeyCredential(
                 withContext(relyingPartyDispatcher) {
                     rpClient.verifyRegistration(createResult)
                 }
+            } catch (e: CancellationException) {
+                // No cleanup: the credential is fully registered here, so deleteAccount can still remove it.
+                throw e
             } catch (e: Throwable) {
                 val rpException = WebAuthnException.RpException(
                     "Error occurred while verifying registration data from rp: $e",
@@ -135,6 +191,12 @@ class PublicKeyCredential(
 
                 try {
                     authenticator.retryCleanup(createResult.id, maxTries = 2, delayMillis = 1000)
+                } catch (e2: CancellationException) {
+                    // Only the delay between cleanup attempts is cancellable, so the key deletion already
+                    // ran once. The relying-party failure rides along as a suppressed exception rather than
+                    // being replaced by a DeletionException.
+                    e2.addSuppressed(rpException)
+                    throw e2
                 } catch (e2: Throwable) {
                     throw WebAuthnException.DeletionException(
                         "Error occurred while deleting key: $e2",
@@ -150,6 +212,9 @@ class PublicKeyCredential(
     /**
      * Initiates the authentication process for an existing credential.
      *
+     * As with [create], a cancelled scope completes this function with a [CancellationException] rather than
+     * with a `Result.failure`.
+     *
      * @param activity The activity context used for UI operations.
      * @param options The authentication options provided by the relying party.
      * @param fido2PromptInfo Optional prompt information for FIDO2 authentication.
@@ -162,11 +227,13 @@ class PublicKeyCredential(
         options: AuthenticationOptions,
         fido2PromptInfo: Fido2PromptInfo? = null
     ): Result<Unit> = mutex.withLock {
-        runCatching {
+        runCatchingCancellable {
             val authenticationData: AuthenticationData = try {
                 withContext(relyingPartyDispatcher) {
                     rpClient.getAuthenticationData(options)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 throw WebAuthnException.RpException(
                     "Error occurred while getting authentication data from rp: $e",
@@ -190,6 +257,8 @@ class PublicKeyCredential(
                 withContext(relyingPartyDispatcher) {
                     rpClient.verifyAuthentication(getResult)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 throw WebAuthnException.RpException(
                     "Error occurred while verifying authentication data from rp: $e",
@@ -200,63 +269,107 @@ class PublicKeyCredential(
     }
 
     /**
+     * Runs [block] and captures its failure in a [Result], except cancellation.
+     *
+     * `runCatching` catches [Throwable], so it would turn a cancelled scope into a `Result.failure`.
+     */
+    private inline fun <T> runCatchingCancellable(block: () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        Result.failure(e)
+    }
+
+    /**
      * Retrieves all registered accounts.
+     *
+     * Every stored credential is returned exactly once, whichever authenticator type registered it.
      *
      * @return List of all registered PublicKeyCredentialSource.
      * @throws WebAuthnException.CredSrcStorageException If there is an error loading credentials from the database.
      */
-    suspend fun getAllAccounts(): List<com.linecorp.webauthn.model.PublicKeyCredentialSource> {
-        val result = mutableListOf<com.linecorp.webauthn.model.PublicKeyCredentialSource>()
-        for (authMethod in AuthenticationMethod.entries) {
-            for (fmt in AttestationStatementFormat.entries) {
-                val authenticator = authenticatorProvider.getAuthenticator(
-                    authenticationMethod = authMethod,
-                    attestationStatement = fmt,
-                    fido2PromptInfo = null,
-                )
-                val credentials: List<com.linecorp.webauthn.model.PublicKeyCredentialSource> = try {
-                    withContext(databaseDispatcher) {
-                        authenticator.db.loadAll()
-                    }
-                } catch (e: Exception) {
-                    throw WebAuthnException.CredSrcStorageException(
-                        "Failed to load credentials for authenticator type: ${authenticator.authType}",
-                        e
-                    )
-                }
-                result.addAll(credentials)
-            }
+    suspend fun getAllAccounts(): List<PublicKeyCredentialSource> {
+        val storage = anyAuthenticator().db
+        return try {
+            withContext(databaseDispatcher) { storage.loadAll() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw WebAuthnException.CredSrcStorageException("Failed to load credentials", e)
         }
-
-        return result
     }
 
     /**
-     * Deletes all registered accounts.
+     * Deletes all registered accounts, including their hardware-backed key material.
      *
-     * @throws WebAuthnException.CredSrcStorageException If there is an error loading or deleting credentials from the database.
+     * This is irreversible: the private keys cannot be recovered, and a credential that is still
+     * registered at the relying party has to be deregistered there separately.
+     *
+     * Deletion is best effort: every credential is attempted even when an earlier one fails, and the first
+     * failure is rethrown with any later ones attached to it as suppressed exceptions.
+     *
+     * A credential whose key could not be deleted keeps its database row, since that row is the only record
+     * of the KeyStore alias, so it stays listed by [getAllAccounts] and fails here again on every later
+     * call. See [deleteAccount] for how to abandon such a key.
+     *
+     * @throws WebAuthnException.CredSrcStorageException If the credentials could not be loaded, or a row
+     * could not be deleted.
+     * @throws WebAuthnException.SecureExecutionException If key material could not be deleted.
      */
     suspend fun deleteAllAccounts() {
-        for (authMethod in AuthenticationMethod.entries) {
-            for (fmt in AttestationStatementFormat.entries) {
-                val authenticator = authenticatorProvider.getAuthenticator(
-                    authenticationMethod = authMethod,
-                    attestationStatement = fmt,
-                    fido2PromptInfo = null,
-                )
-
-                try {
-                    withContext(databaseDispatcher) {
-                        authenticator.db.loadAll().forEach { credential ->
-                            authenticator.db.delete(credential.id)
-                        }
-                    }
-                } catch (e: Exception) {
-                    throw WebAuthnException.CredSrcStorageException("Failed to load and delete all credentials", e)
-                }
+        val authenticator = anyAuthenticator()
+        val failures = mutableListOf<Throwable>()
+        for (credential in getAllAccounts()) {
+            try {
+                withContext(databaseDispatcher) { authenticator.cleanup(credential.id) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                failures.add(e)
             }
         }
+        failures.firstOrNull()?.let { firstFailure ->
+            // addSuppressed throws IllegalArgumentException on self-suppression, and one exception instance
+            // can come back for several credentials (a cached or stubbed throwable from the storage layer).
+            failures.drop(1).forEach { if (it !== firstFailure) firstFailure.addSuppressed(it) }
+            throw firstFailure
+        }
     }
+
+    /**
+     * Deletes one registered account: its hardware-backed key material, and then its database row.
+     *
+     * Idempotent. An unknown [credId] is not an error, because a missing KeyStore alias and a missing row
+     * are indistinguishable from a deletion that already succeeded.
+     *
+     * @param credId The credential id as returned by [getAllAccounts], which is also the KeyStore alias of
+     * the credential's private key.
+     * @throws WebAuthnException.SecureExecutionException If the key material could not be deleted. The
+     * database row is kept in that case, since it is the only record of the KeyStore alias, so every later
+     * call for this [credId] fails the same way until the key deletion succeeds. To abandon the key instead,
+     * delete the row through your own [com.linecorp.webauthn.db.CredentialSourceStorage].
+     * @throws WebAuthnException.CredSrcStorageException If the database row could not be deleted.
+     */
+    suspend fun deleteAccount(credId: String) {
+        val authenticator = anyAuthenticator()
+        withContext(databaseDispatcher) { authenticator.cleanup(credId) }
+    }
+
+    /**
+     * An [Authenticator] used only to reach shared state, with no prompt attached.
+     *
+     * The credential storage is one consumer-supplied instance shared by every authenticator type, so any
+     * authenticator reaches every stored credential, and one instance is enough for the account APIs above.
+     *
+     * `loadAll()` stays unfiltered: passing `authType.aaguid` would hide rows whose aaguid is not one of the
+     * [com.linecorp.webauthn.model.AuthenticatorType] values.
+     */
+    private fun anyAuthenticator(): Authenticator = authenticatorProvider.getAuthenticator(
+        authenticationMethod = authenticationMethod,
+        attestationStatement = attestationStatement,
+        fido2PromptInfo = null,
+    )
 
     /**
      * Creates a new public key credential.
@@ -276,19 +389,18 @@ class PublicKeyCredential(
         fido2PromptInfo: Fido2PromptInfo? = null
     ): PublicKeyCredentialCreateResult {
         try {
-            if (options.user.id.length !in 1..64) {
-                throw WebAuthnException.CoreException.TypeException(
-                    "The length of the user id must be between 1 and 64."
-                )
-            }
+            validateUserHandle(options.user.id)
 
             val credTypesAndPubKeyAlgs = processCredTypesAndPubKeyAlgs(options)
 
+            val origin = withContext(Dispatchers.IO) {
+                Fido2Util.getPackageFacetID(activity.applicationContext)
+            }
             val collectedClientData =
                 CollectedClientData(
                     type = "webauthn.create",
                     challenge = options.challenge,
-                    origin = Fido2Util.getPackageFacetID(activity.applicationContext),
+                    origin = origin,
                 )
             val clientDataJSON: ByteArray = Json.encodeToString(collectedClientData).toByteArray()
             val clientDataHash: ByteArray =
@@ -319,12 +431,14 @@ class PublicKeyCredential(
                 ),
                 clientExtensionsOutput = options.extensions?.processClientExtensionsOutput(),
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             if (e is WebAuthnException) {
                 throw e
             } else {
                 throw WebAuthnException.UnknownException(
-                    "Error occurred while creating public key credential: $e",
+                    "Unhandled ${e::class.java.name} while creating public key credential: ${e.message}",
                     e
                 )
             }
@@ -348,40 +462,78 @@ class PublicKeyCredential(
         options: PublicKeyCredentialRequestOptions,
         fido2PromptInfo: Fido2PromptInfo? = null
     ): PublicKeyCredentialGetResult {
-        val collectedClientData = CollectedClientData(
-            type = "webauthn.get",
-            challenge = options.challenge,
-            origin = Fido2Util.getPackageFacetID(activity.applicationContext),
-        )
-        val clientDataJSON: ByteArray = Json.encodeToString(collectedClientData).toByteArray()
-        val clientDataHash: ByteArray =
-            MessageDigest.getInstance("SHA-256").digest(clientDataJSON)
+        try {
+            // Off the caller's dispatcher: a PackageManager binder round trip, an X.509 parse and a SHA-256
+            // on every operation.
+            val origin = withContext(Dispatchers.IO) {
+                Fido2Util.getPackageFacetID(activity.applicationContext)
+            }
+            val collectedClientData = CollectedClientData(
+                type = "webauthn.get",
+                challenge = options.challenge,
+                origin = origin,
+            )
+            val clientDataJSON: ByteArray = Json.encodeToString(collectedClientData).toByteArray()
+            val clientDataHash: ByteArray =
+                MessageDigest.getInstance("SHA-256").digest(clientDataJSON)
 
-        authenticator = authenticatorProvider.getAuthenticator(
-            authenticationMethod = authenticationMethod,
-            attestationStatement = attestationStatement,
-            fido2PromptInfo = fido2PromptInfo
-        )
+            authenticator = authenticatorProvider.getAuthenticator(
+                authenticationMethod = authenticationMethod,
+                attestationStatement = attestationStatement,
+                fido2PromptInfo = fido2PromptInfo
+            )
 
-        val authGetAssertionResult: AuthenticatorGetAssertionResult = authenticator.getAssertion(
-            activity = activity,
-            rpId = options.rpId,
-            hash = clientDataHash,
-            allowCredDescriptorList = options.allowCredentials,
-            extensions = options.extensions?.processAuthenticatorExtensionsInput(),
-        ).getOrThrow()
+            val authGetAssertionResult: AuthenticatorGetAssertionResult = authenticator.getAssertion(
+                activity = activity,
+                rpId = options.rpId,
+                hash = clientDataHash,
+                allowCredDescriptorList = options.allowCredentials,
+                extensions = options.extensions?.processAuthenticatorExtensionsInput(),
+            ).getOrThrow()
 
-        return PublicKeyCredentialGetResult(
-            id = authGetAssertionResult.credentialId.toBase64url(),
-            authenticatorAssertionResponse =
-            com.linecorp.webauthn.model.AuthenticatorAssertionResponse(
-                clientDataJSON = clientDataJSON,
-                authenticatorData = authGetAssertionResult.authenticatorData,
-                signature = authGetAssertionResult.signature,
-                userHandle = authGetAssertionResult.userHandle,
-            ),
-            clientExtensionsOutput = options.extensions?.processClientExtensionsOutput(),
-        )
+            return PublicKeyCredentialGetResult(
+                id = authGetAssertionResult.credentialId.toBase64url(),
+                authenticatorAssertionResponse =
+                com.linecorp.webauthn.model.AuthenticatorAssertionResponse(
+                    clientDataJSON = clientDataJSON,
+                    authenticatorData = authGetAssertionResult.authenticatorData,
+                    signature = authGetAssertionResult.signature,
+                    userHandle = authGetAssertionResult.userHandle,
+                ),
+                clientExtensionsOutput = options.extensions?.processClientExtensionsOutput(),
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (e is WebAuthnException) {
+                throw e
+            }
+            throw WebAuthnException.UnknownException(
+                "Unhandled ${e::class.java.name} while getting public key credential: ${e.message}",
+                e
+            )
+        }
+    }
+
+    /**
+     * The user handle must be 1..64 **bytes** per WebAuthn Level 2 and `user.id` carries it as base64url,
+     * so the length is measured after decoding.
+     *
+     * A value that is not valid base64url falls back to its character count rather than being rejected, so
+     * that an existing integration does not start failing every registration on upgrade. Non-base64url ids
+     * are unsupported and will be rejected in a future release.
+     */
+    private fun validateUserHandle(userId: String) {
+        val decodedSize = try {
+            userId.base64urlToByteArray().size
+        } catch (e: WebAuthnException.UtilityException) {
+            userId.length
+        }
+        if (decodedSize !in 1..64) {
+            throw WebAuthnException.CoreException.TypeException(
+                "The length of the user id must be between 1 and 64 bytes, but was $decodedSize."
+            )
+        }
     }
 
     /**

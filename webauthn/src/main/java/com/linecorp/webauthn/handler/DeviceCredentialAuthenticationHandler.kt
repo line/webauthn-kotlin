@@ -18,6 +18,7 @@ package com.linecorp.webauthn.handler
 
 import android.content.Context
 import android.os.Build
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
@@ -26,6 +27,7 @@ import com.linecorp.webauthn.model.Fido2PromptInfo
 import com.linecorp.webauthn.model.Fido2UserAuthResult
 import java.security.Signature
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -33,30 +35,42 @@ import kotlinx.coroutines.withContext
 
 internal class DeviceCredentialAuthenticationHandler(
     private val authHandlerDispatcher: CoroutineDispatcher = Dispatchers.Main,
-) : AuthenticationHandler {
+    private val keyguardManagerWrapper: KeyguardManagerWrapper = KeyguardManagerWrapper(),
+) : AuthenticationHandler,
+    AuthenticationCapability {
 
-    private val keyguardManagerWrapper = KeyguardManagerWrapper()
-
-    override fun isSupported(context: Context): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        // API level >= 30
-        val biometricManager = BiometricManager.from(context)
-        biometricManager.canAuthenticate(
+    override fun canAuthenticateStatus(context: Context): Int = if (
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+    ) {
+        BiometricManager.from(context).canAuthenticate(
             BiometricManager.Authenticators.BIOMETRIC_STRONG or
                 BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        ) == BiometricManager.BIOMETRIC_SUCCESS
+        )
+    } else if (keyguardManagerWrapper.isSupported(context)) {
+        BiometricManager.BIOMETRIC_SUCCESS
     } else {
-        // API level < 30
-        keyguardManagerWrapper.isSupported(context)
+        BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED
     }
+
+    override fun isSupported(context: Context): Boolean =
+        canAuthenticateStatus(context) == BiometricManager.BIOMETRIC_SUCCESS
 
     override suspend fun authenticate(
         activity: FragmentActivity,
         fido2PromptInfo: Fido2PromptInfo?,
         signatureProvider: (() -> Signature)?
-    ): Fido2UserAuthResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        authenticateUserWithBiometricPrompt(activity, fido2PromptInfo, signatureProvider)
-    } else {
-        authenticateUserWithKeyguardManager(activity, fido2PromptInfo, signatureProvider)
+    ): Fido2UserAuthResult {
+        if (activity.supportFragmentManager.isStateSaved) {
+            throw AuthenticationHandler.AuthenticationErrorException(
+                errorCode = AuthenticationHandler.ERROR_HOST_STATE_SAVED,
+                message = HOST_STATE_SAVED_MESSAGE
+            )
+        }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            authenticateUserWithBiometricPrompt(activity, fido2PromptInfo, signatureProvider)
+        } else {
+            authenticateUserWithKeyguardManager(activity, fido2PromptInfo, signatureProvider)
+        }
     }
 
     private suspend fun authenticateUserWithBiometricPrompt(
@@ -65,6 +79,16 @@ internal class DeviceCredentialAuthenticationHandler(
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult = withContext(authHandlerDispatcher) {
         suspendCancellableCoroutine { continuation ->
+            if (activity.supportFragmentManager.isStateSaved) {
+                continuation.resumeWithException(
+                    AuthenticationHandler.AuthenticationErrorException(
+                        errorCode = AuthenticationHandler.ERROR_HOST_STATE_SAVED,
+                        message = HOST_STATE_SAVED_MESSAGE
+                    )
+                )
+                return@suspendCancellableCoroutine
+            }
+
             val promptInfo =
                 BiometricPrompt.PromptInfo.Builder()
                     .setTitle(fido2PromptInfo?.title ?: "Device Credential Authentication")
@@ -85,13 +109,15 @@ internal class DeviceCredentialAuthenticationHandler(
                     ContextCompat.getMainExecutor(activity.applicationContext),
                     object : BiometricPrompt.AuthenticationCallback() {
                         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                            continuation.resumeWith(
-                                Result.success(
-                                    Fido2UserAuthResult(
-                                        signature = result.cryptoObject?.signature
+                            if (continuation.isActive) {
+                                continuation.resumeWith(
+                                    Result.success(
+                                        Fido2UserAuthResult(
+                                            signature = result.cryptoObject?.signature
+                                        )
                                     )
                                 )
-                            )
+                            }
                         }
 
                         override fun onAuthenticationFailed() {
@@ -99,18 +125,22 @@ internal class DeviceCredentialAuthenticationHandler(
                         }
 
                         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                            continuation.resumeWithException(
-                                AuthenticationHandler.AuthenticationErrorException(
-                                    errorCode,
-                                    "Biometric authentication error: $errString"
+                            if (continuation.isActive) {
+                                continuation.resumeWithException(
+                                    AuthenticationHandler.AuthenticationErrorException(
+                                        errorCode,
+                                        "Biometric authentication error: $errString"
+                                    )
                                 )
-                            )
+                            }
                         }
                     },
                 )
 
             continuation.invokeOnCancellation {
-                biometricPrompt.cancelAuthentication()
+                ContextCompat.getMainExecutor(activity.applicationContext).execute {
+                    biometricPrompt.cancelAuthentication()
+                }
             }
 
             if (signatureProvider != null) {
@@ -127,6 +157,12 @@ internal class DeviceCredentialAuthenticationHandler(
         fido2PromptInfo: Fido2PromptInfo?,
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult = withContext(authHandlerDispatcher) {
+        if (activity.supportFragmentManager.isStateSaved) {
+            throw AuthenticationHandler.AuthenticationErrorException(
+                errorCode = AuthenticationHandler.ERROR_HOST_STATE_SAVED,
+                message = HOST_STATE_SAVED_MESSAGE
+            )
+        }
         try {
             keyguardManagerWrapper.authenticate(activity, fido2PromptInfo)
             val signature = signatureProvider?.invoke()
@@ -147,9 +183,21 @@ internal class DeviceCredentialAuthenticationHandler(
                 message = e.message,
                 cause = e
             )
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            // Must not be wrapped. `Authenticator.authenticate` maps this to
+            // `WebAuthnException.AuthenticationException.KeyPermanentlyInvalidatedException`, but its
+            // AuthenticationErrorException branch matches first, so a wrapped one reaches the caller as a
+            // bare NotAllowedException - indistinguishable from a user cancellation, when in fact the
+            // credential needs re-registration. Not extended to `UserNotAuthenticatedException`, which has
+            // no such mapping: rethrowing it would only turn a NotAllowedException into an UnknownException.
+            // Only this path needs the rethrow: from API 30 up `signatureProvider()` runs inside
+            // `suspendCancellableCoroutine` with no catch around it.
+            throw e
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw AuthenticationHandler.AuthenticationErrorException(
-                message = "An unexpected error occurred",
+                message = "An unexpected error occurred: ${e::class.java.name}: ${e.message}",
                 cause = e
             )
         }

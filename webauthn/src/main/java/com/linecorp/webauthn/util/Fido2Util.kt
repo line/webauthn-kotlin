@@ -18,6 +18,7 @@ package com.linecorp.webauthn.util
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.pm.SigningInfo
 import android.os.Build
 import android.util.Base64
 import com.linecorp.webauthn.exceptions.WebAuthnException
@@ -30,17 +31,32 @@ import java.security.cert.X509Certificate
 
 class Fido2Util {
     companion object {
+        /**
+         * The calling package's facet ID, as used for the `origin` of the collected client data.
+         *
+         * The returned string is part of the signed `clientDataJSON` that the relying party verifies, so
+         * neither the hash nor the encoding may change.
+         *
+         * This does a PackageManager binder round trip, an X.509 parse and a SHA-256, so callers run it off
+         * the main thread.
+         *
+         * @throws WebAuthnException.UtilityException If the calling package has no usable signing certificate.
+         */
         fun getPackageFacetID(context: Context): String {
             val cert: ByteArray = if (Build.VERSION.SDK_INT >= 33) {
-                context.packageManager.getPackageInfo(
-                    context.packageName,
-                    PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
-                ).signingInfo!!.apkContentsSigners[0].toByteArray()
+                firstApkContentsSigner(
+                    context.packageManager.getPackageInfo(
+                        context.packageName,
+                        PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
+                    ).signingInfo
+                )
             } else {
-                context.packageManager.getPackageInfo(
-                    context.packageName,
-                    PackageManager.GET_SIGNING_CERTIFICATES
-                ).signingInfo!!.apkContentsSigners[0].toByteArray()
+                firstApkContentsSigner(
+                    context.packageManager.getPackageInfo(
+                        context.packageName,
+                        PackageManager.GET_SIGNING_CERTIFICATES
+                    ).signingInfo
+                )
             }
             val input: InputStream = ByteArrayInputStream(cert)
             val cf = CertificateFactory.getInstance("X509")
@@ -52,6 +68,17 @@ class Fido2Util {
             // Supposed to be default (non URL safe) encoding
             return "android:apk-key-hash-sha256:" +
                 Base64.encodeToString(hash, Base64.DEFAULT or Base64.NO_WRAP or Base64.NO_PADDING)
+        }
+
+        private fun firstApkContentsSigner(signingInfo: SigningInfo?): ByteArray {
+            if (signingInfo == null) {
+                throw WebAuthnException.UtilityException("No signing info available for the calling package.")
+            }
+            val signers = signingInfo.apkContentsSigners
+            if (signers.isNullOrEmpty()) {
+                throw WebAuthnException.UtilityException("The calling package has no APK content signers.")
+            }
+            return signers[0].toByteArray()
         }
 
         fun generateRandomByteArray(numByte: Int): ByteArray {

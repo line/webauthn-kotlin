@@ -18,7 +18,6 @@ package com.linecorp.webauthn.authenticator.keygenerator
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.security.keystore.StrongBoxUnavailableException
 import com.linecorp.webauthn.model.COSEAlgorithmIdentifier
 import com.linecorp.webauthn.model.getAlgorithmParameterSpec
 import com.linecorp.webauthn.model.getDigests
@@ -35,16 +34,8 @@ class BiometricKeyGenerator : Fido2KeyGenerator() {
         publicKeyAlgorithm: COSEAlgorithmIdentifier,
         isStrongBoxBacked: Boolean,
         userAuthenticationRequired: Boolean
-    ): KeyPair {
-        return if (isStrongBoxBacked) {
-            return try {
-                generateBiometricFido2Key(keyAlias, challenge, publicKeyAlgorithm, true, userAuthenticationRequired)
-            } catch (e: StrongBoxUnavailableException) {
-                generateBiometricFido2Key(keyAlias, challenge, publicKeyAlgorithm, false, userAuthenticationRequired)
-            }
-        } else {
-            generateBiometricFido2Key(keyAlias, challenge, publicKeyAlgorithm, false, userAuthenticationRequired)
-        }
+    ): KeyPair = generateWithStrongBoxFallback(isStrongBoxBacked) { strongBox ->
+        generateBiometricFido2Key(keyAlias, challenge, publicKeyAlgorithm, strongBox, userAuthenticationRequired)
     }
 
     private fun generateBiometricFido2Key(

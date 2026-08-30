@@ -28,6 +28,10 @@ import java.security.Signature
  */
 interface AuthenticationHandler {
 
+    companion object {
+        const val ERROR_HOST_STATE_SAVED: Int = -1
+    }
+
     class AuthenticationFailedException(val errorCode: Int? = null, message: String? = null, cause: Throwable? = null) :
         Exception(message, cause)
     class AuthenticationErrorException(val errorCode: Int? = null, message: String? = null, cause: Throwable? = null) :
@@ -55,4 +59,14 @@ interface AuthenticationHandler {
         fido2PromptInfo: Fido2PromptInfo?,
         signatureProvider: (() -> Signature)? = null
     ): Fido2UserAuthResult
+}
+
+/**
+ * Exposes the raw platform status behind [AuthenticationHandler.isSupported].
+ *
+ * A separate interface, not a member of [AuthenticationHandler]: adding one there would break every Java
+ * implementor.
+ */
+internal interface AuthenticationCapability {
+    fun canAuthenticateStatus(context: Context): Int
 }

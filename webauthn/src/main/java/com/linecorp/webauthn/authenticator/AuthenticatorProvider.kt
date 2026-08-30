@@ -70,6 +70,9 @@ class AuthenticatorProvider(
             authType = authType,
             fido2PromptInfo = fido2PromptInfo,
             databaseDispatcher = databaseDispatcher,
+            // Not a defaulted parameter of this public constructor: adding one would change the constructor
+            // descriptor and break already-compiled consumers with a NoSuchMethodError.
+            keystoreDispatcher = Dispatchers.IO,
         )
     }
 }

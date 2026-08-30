@@ -16,6 +16,7 @@
 
 package com.linecorp.webauthn.model
 
+import co.nstant.`in`.cbor.CborBuilder
 import co.nstant.`in`.cbor.builder.AbstractBuilder
 import co.nstant.`in`.cbor.builder.MapBuilder
 
@@ -32,11 +33,29 @@ import co.nstant.`in`.cbor.builder.MapBuilder
  */
 data class AttestationObject(val authData: ByteArray, val fmt: String, val attStmt: AttestationStatement,) :
     CborSerializable {
-    override fun <T : AbstractBuilder<*>?> toCBOR(builder: MapBuilder<T>): T {
+    override fun <T : AbstractBuilder<*>?> toCBOR(builder: MapBuilder<T>): T =
+        putEntries(builder, nestDefiniteLength = true)
+
+    /**
+     * Overrides the interface default so that [canonical] reaches the nested `attStmt` map as well as
+     * the top-level one; this is the only [CborSerializable] that nests a map. A new member on that
+     * interface would instead add an abstract JVM method every Java implementor would have to implement.
+     */
+    override fun toCBOR(canonical: Boolean): ByteArray {
+        if (canonical) {
+            return super.toCBOR(canonical)
+        }
+        return encodeToCborBytes { putEntries(CborBuilder().startMap(), nestDefiniteLength = false) }
+    }
+
+    private fun <T : AbstractBuilder<*>?> putEntries(builder: MapBuilder<T>, nestDefiniteLength: Boolean): T {
         builder.put("authData", authData)
         builder.put("fmt", fmt)
         if (fmt == AttestationStatementFormat.NONE.value) {
+            // An empty attStmt is definite-length in both forms, so this branch ignores nestDefiniteLength.
             builder.putMap("attStmt")
+        } else if (nestDefiniteLength) {
+            attStmt.toCBOR(builder.putMap("attStmt"))
         } else {
             attStmt.toCBOR(builder.startMap("attStmt"))
         }

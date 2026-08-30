@@ -41,9 +41,6 @@ interface CredentialSourceStorage {
     /**
      * Loads all stored credential sources, optionally filtered by an AAGUID.
      *
-     * If the `aaguid` parameter is null, the method returns all stored credential sources.
-     * If a specific `aaguid` is provided, only the credential sources with the matching AAGUID are returned.
-     *
      * @param aaguid Optional parameter to filter credential sources by AAGUID.
      *               If null, all credential sources are loaded.
      * @return A list of credential sources, filtered by the specified AAGUID if provided.

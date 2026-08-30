@@ -23,9 +23,6 @@ import java.security.KeyStoreException
 import java.security.PublicKey
 import java.security.cert.X509Certificate
 
-/**
- * Helper class for secure execution
- */
 internal object SecureExecutionHelper {
     private val lock = Any()
 
@@ -39,6 +36,12 @@ internal object SecureExecutionHelper {
             } catch (e: Throwable) {
                 throw WebAuthnException.SecureExecutionException("Cannot delete key from KeyStore.", e)
             }
+        }
+    }
+
+    fun deleteKeyIfPresent(keyAlias: String) {
+        if (containAlias(keyAlias)) {
+            deleteKey(keyAlias)
         }
     }
 

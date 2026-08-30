@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      AuthenticationActivity extends AppCompatActivity, so AppCompatDelegate inflates a sub-decor even
+      though the activity never calls setContentView. Without an AppCompat theme that throws
+      IllegalStateException and takes the host process down on a Theme.Material / DeviceDefault host.
+      Opaque on purpose: a translucent theme changes the lifecycle of the activity underneath and
+      interacts with BiometricFragment's API 28 onStop cancellation.
+    -->
+    <style name="Theme.WebAuthn.DeviceCredential" parent="Theme.AppCompat.DayNight.NoActionBar" />
+</resources>
