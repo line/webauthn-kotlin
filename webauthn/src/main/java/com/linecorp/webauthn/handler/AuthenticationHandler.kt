@@ -56,3 +56,13 @@ interface AuthenticationHandler {
         signatureProvider: (() -> Signature)? = null
     ): Fido2UserAuthResult
 }
+
+/**
+ * Exposes the raw platform status behind [AuthenticationHandler.isSupported].
+ *
+ * A separate interface, not a member of [AuthenticationHandler]: adding one there would break every Java
+ * implementor.
+ */
+internal interface AuthenticationCapability {
+    fun canAuthenticateStatus(context: Context): Int
+}

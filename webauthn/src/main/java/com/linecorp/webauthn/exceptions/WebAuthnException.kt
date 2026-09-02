@@ -23,14 +23,46 @@ sealed class WebAuthnException(override val message: String?, override val cause
         class ConstraintException(
             message: String? = "A mutation operation in a transaction failed because a constraint was not satisfied.",
             cause: Throwable? = null
-        ) : CoreException(message, cause)
+        ) : CoreException(message, cause) {
+            /**
+             * The `BiometricManager.canAuthenticate()` status that caused this exception, when known.
+             *
+             * Compare against the `BiometricManager.BIOMETRIC_*` constants; before treating
+             * `BIOMETRIC_ERROR_NO_HARDWARE` as permanent, see
+             * [com.linecorp.webauthn.model.AuthenticationAvailability.Reason.NO_HARDWARE]. Below API 30 the
+             * device-credential path has no platform status code, so it reports
+             * `BIOMETRIC_ERROR_NONE_ENROLLED` derived from `KeyguardManager.isDeviceSecure`. `null` only
+             * if the authentication handler in use exposes no status at all.
+             */
+            var canAuthenticateStatus: Int? = null
+                internal set
+        }
         class InvalidStateException(message: String? = "The object is in an invalid state.", cause: Throwable? = null) :
             CoreException(message, cause)
-        class NotAllowedException(
+        open class NotAllowedException(
             message: String? = "The request is not allowed by the user agent or the platform in the current context, " +
                 "possibly because the user denied permission.",
             cause: Throwable? = null
-        ) : CoreException(message, cause)
+        ) : CoreException(message, cause) {
+            /**
+             * The `BiometricPrompt.ERROR_*` code that caused this exception, when known.
+             *
+             * A `BiometricManager.BIOMETRIC_*` status is a different value space that overlaps numerically
+             * (`BIOMETRIC_STATUS_UNKNOWN` is -1) and is reported through
+             * [ConstraintException.canAuthenticateStatus], never here.
+             */
+            var errorCode: Int? = null
+                internal set
+        }
+
+        /**
+         * The user dismissed the authentication prompt: a normal outcome, not a failure to report as an
+         * error. A subtype of [NotAllowedException] so existing `catch` clauses keep matching.
+         */
+        class UserCancelledException(
+            message: String? = "The user cancelled the authentication prompt.",
+            cause: Throwable? = null
+        ) : NotAllowedException(message, cause)
         class NotSupportedException(message: String? = "The operation is not supported.", cause: Throwable? = null) :
             CoreException(message, cause)
         class TypeException(message: String? = null, cause: Throwable? = null) : CoreException(message, cause)
@@ -46,8 +78,22 @@ sealed class WebAuthnException(override val message: String?, override val cause
             cause: Throwable? = null
         ) : AuthenticationException(message, cause)
     }
-    class SecureExecutionException(message: String? = null, cause: Throwable? = null) :
+    open class SecureExecutionException(message: String? = null, cause: Throwable? = null) :
         WebAuthnException(message, cause)
+
+    /**
+     * The platform keystore rejected an operation during credential creation: key generation usually, but
+     * signing and the attestation certificate-chain read reach the same handler too.
+     *
+     * A subtype of [SecureExecutionException] rather than a new direct subclass, so that consumer `when`
+     * blocks over the sealed [WebAuthnException] stay exhaustive.
+     */
+    class KeyGenerationException(message: String? = null, cause: Throwable? = null) :
+        SecureExecutionException(message, cause) {
+        /** `android.security.KeyStoreException.getNumericErrorCode()` when it could be read. */
+        var keyStoreErrorCode: Int? = null
+            internal set
+    }
     class KeyNotFoundException(message: String? = null, cause: Throwable? = null) : WebAuthnException(message, cause)
     class UnknownException(message: String, cause: Throwable? = null) : WebAuthnException(message, cause)
     class UtilityException(message: String, cause: Throwable? = null) : WebAuthnException(message, cause)
@@ -62,6 +108,12 @@ sealed class WebAuthnException(override val message: String?, override val cause
      * @param cause The cause of the issue during the deletion process.
      * @param trigger The exception that triggered the deletion.
      */
-    class DeletionException(message: String, cause: Throwable? = null, trigger: Throwable? = null) :
-        WebAuthnException(message, cause)
+    class DeletionException(message: String, cause: Throwable? = null, val trigger: Throwable? = null) :
+        WebAuthnException(message, cause) {
+        init {
+            if (trigger != null && trigger !== cause && trigger !== this) {
+                addSuppressed(trigger)
+            }
+        }
+    }
 }

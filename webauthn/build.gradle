@@ -134,7 +134,9 @@ dependencies {
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$project.kotlinxCoroutinesVersion"
 
     // androidx biometric
-    implementation "androidx.biometric:biometric:$project.biometricVersion"
+    // api, not implementation: the SDK's public error surface speaks in BiometricPrompt.ERROR_* and
+    // BiometricManager.BIOMETRIC_* values, so consumers need these types to interpret it.
+    api "androidx.biometric:biometric:$project.biometricVersion"
 
     // Room
     implementation "androidx.room:room-runtime:$project.roomVersion"

@@ -33,21 +33,28 @@ import kotlinx.coroutines.withContext
 
 internal class DeviceCredentialAuthenticationHandler(
     private val authHandlerDispatcher: CoroutineDispatcher = Dispatchers.Main,
-) : AuthenticationHandler {
+    private val keyguardManagerWrapper: KeyguardManagerWrapper = KeyguardManagerWrapper(),
+) : AuthenticationHandler,
+    AuthenticationCapability {
 
-    private val keyguardManagerWrapper = KeyguardManagerWrapper()
-
-    override fun isSupported(context: Context): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        // API level >= 30
-        val biometricManager = BiometricManager.from(context)
-        biometricManager.canAuthenticate(
+    // Below API 30 there is no platform status code, so the keyguard result is mapped onto the two
+    // BiometricManager values it can stand for: a secure keyguard is a usable credential, and its
+    // absence is the same actionable state as no enrolled biometric.
+    override fun canAuthenticateStatus(context: Context): Int = if (
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+    ) {
+        BiometricManager.from(context).canAuthenticate(
             BiometricManager.Authenticators.BIOMETRIC_STRONG or
                 BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        ) == BiometricManager.BIOMETRIC_SUCCESS
+        )
+    } else if (keyguardManagerWrapper.isSupported(context)) {
+        BiometricManager.BIOMETRIC_SUCCESS
     } else {
-        // API level < 30
-        keyguardManagerWrapper.isSupported(context)
+        BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED
     }
+
+    override fun isSupported(context: Context): Boolean =
+        canAuthenticateStatus(context) == BiometricManager.BIOMETRIC_SUCCESS
 
     override suspend fun authenticate(
         activity: FragmentActivity,

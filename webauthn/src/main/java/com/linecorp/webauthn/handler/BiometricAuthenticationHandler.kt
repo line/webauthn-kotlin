@@ -32,13 +32,14 @@ import kotlinx.coroutines.withContext
 
 internal class BiometricAuthenticationHandler(
     private val authHandlerDispatcher: CoroutineDispatcher = Dispatchers.Main,
-) : AuthenticationHandler {
-    override fun isSupported(context: Context): Boolean {
-        val biometricManager = BiometricManager.from(context)
-        return biometricManager.canAuthenticate(
-            BiometricManager.Authenticators.BIOMETRIC_STRONG
-        ) == BiometricManager.BIOMETRIC_SUCCESS
-    }
+) : AuthenticationHandler,
+    AuthenticationCapability {
+
+    override fun canAuthenticateStatus(context: Context): Int =
+        BiometricManager.from(context).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+
+    override fun isSupported(context: Context): Boolean =
+        canAuthenticateStatus(context) == BiometricManager.BIOMETRIC_SUCCESS
 
     override suspend fun authenticate(
         activity: FragmentActivity,
@@ -61,6 +62,12 @@ internal class BiometricAuthenticationHandler(
                             ?: "Input your Fingerprint or FaceID to ensure it's you!",
                     )
                     .setNegativeButtonText(fido2PromptInfo?.negativeButtonText ?: "Cancel")
+                    // Without this, androidx derives the allowed set from whether a CryptoObject is
+                    // present: `crypto != null ? BIOMETRIC_STRONG : BIOMETRIC_WEAK`. Registration in the
+                    // `none` format passes no CryptoObject, so the prompt would accept a Class 2
+                    // authenticator while support detection requires Class 3, the generated key is bound
+                    // to Class 3, and the assertion still claims user verification.
+                    .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                     .build()
 
             val biometricPrompt =
