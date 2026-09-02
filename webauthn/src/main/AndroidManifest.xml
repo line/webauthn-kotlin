@@ -4,8 +4,8 @@
     <application>
         <activity
             android:name=".handler.KeyguardManagerWrapper$AuthenticationActivity"
-            android:configChanges="orientation|screenSize"
-            android:exported="true">
-        </activity>
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode|density|locale|layoutDirection|fontScale"
+            android:exported="false"
+            android:theme="@style/Theme.WebAuthn.DeviceCredential" />
     </application>
 </manifest>
