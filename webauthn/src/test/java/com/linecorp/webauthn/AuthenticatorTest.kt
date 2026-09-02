@@ -18,11 +18,16 @@ package com.linecorp.webauthn
 
 import android.content.Context
 import android.content.pm.PackageManager
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.fragment.app.FragmentActivity
 import com.google.common.truth.Truth.assertThat
 import com.linecorp.webauthn.authenticator.Authenticator
+import com.linecorp.webauthn.authenticator.keygenerator.BiometricKeyGenerator
+import com.linecorp.webauthn.authenticator.keygenerator.DeviceCredentialKeyGenerator
 import com.linecorp.webauthn.authenticator.keygenerator.Fido2KeyGenerator
 import com.linecorp.webauthn.authenticator.objectgenerator.Fido2ObjectGenerator
+import com.linecorp.webauthn.db.CredentialSourceStorage
 import com.linecorp.webauthn.exceptions.WebAuthnException
 import com.linecorp.webauthn.handler.AuthenticationHandler
 import com.linecorp.webauthn.handler.BiometricAuthenticationHandler
@@ -45,6 +50,7 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.spyk
 import io.mockk.unmockkObject
 import java.security.KeyPair
 import java.security.KeyPairGenerator
@@ -155,6 +161,9 @@ class AuthenticatorTest {
         mockAuthenticationHandler = mockk()
         mockSignature = mockk()
         every { mockAuthenticationHandler.isSupported(mockContext) } returns true
+        every {
+            mockAuthenticationHandler.canAuthenticateStatus(mockContext)
+        } returns BiometricManager.BIOMETRIC_SUCCESS
         coEvery { mockAuthenticationHandler.authenticate(any(), any()) } returns Fido2UserAuthResult(mockSignature)
 
         // KeyGenerator
@@ -202,6 +211,27 @@ class AuthenticatorTest {
     @AfterEach
     fun afterEachTearDown() {
         mockFido2Database.removeAllData()
+        // Restore the shared handler stub here rather than at the end of each test body: this class is
+        // PER_CLASS, so a test that fails an assertion midway would otherwise leak its throwing stub into
+        // every test that runs after it. Idempotent, so tests that also reset inline are unaffected.
+        coEvery {
+            mockAuthenticationHandler.authenticate(any(), any(), any())
+        } returns Fido2UserAuthResult(mockSignature)
+        // Same reasoning for the capability stubs: `checkAuthenticationSupport` now reads both, so a test
+        // that makes the device look unsupported must not leak that state into the tests that follow.
+        every { mockAuthenticationHandler.isSupported(mockContext) } returns true
+        every {
+            mockAuthenticationHandler.canAuthenticateStatus(mockContext)
+        } returns BiometricManager.BIOMETRIC_SUCCESS
+        // Same reasoning for the key generator stub: a test that makes key generation fail must not leak
+        // the throwing stub into the tests that follow, even if it fails an assertion before restoring it.
+        every { mockKeyGenerator.generateFido2Key(any(), any(), any(), any()) } returns dummyKeyPair
+        // The SecureExecutionHelper stubs are restored here for a sharper reason than leakage alone:
+        // `generateUniqueCredId` loops `do { ... } while (containAlias(credId))`, so a leaked
+        // `containAlias(any()) returns true` would make every later `makeCredential` spin forever rather
+        // than fail. Restoring after each test is what keeps that loop terminating.
+        every { SecureExecutionHelper.containAlias(any()) } returns false
+        every { SecureExecutionHelper.deleteKey(any()) } returns Unit
     }
 
     @AfterAll
@@ -399,5 +429,395 @@ class AuthenticatorTest {
         coEvery {
             mockAuthenticationHandler.authenticate(any(), any(), any())
         } returns Fido2UserAuthResult(mockSignature)
+    }
+
+    @Test
+    fun `user cancellation surfaces as UserCancelledException carrying the error code`() {
+        listOf(
+            BiometricPrompt.ERROR_CANCELED,
+            BiometricPrompt.ERROR_USER_CANCELED,
+            BiometricPrompt.ERROR_NEGATIVE_BUTTON
+        ).forEach { code ->
+            val thrown = AuthenticationHandler.AuthenticationErrorException(errorCode = code, message = "cancelled")
+            coEvery { mockAuthenticationHandler.authenticate(any(), any(), any()) } throws thrown
+
+            runBlocking {
+                val result = authenticator.getAssertion(mockActivity, registeredRpEntity.id, dummyByteArray, null, null)
+
+                val e = result.exceptionOrNull()
+                assertThat(e).isInstanceOf(WebAuthnException.CoreException.UserCancelledException::class.java)
+                assertThat((e as WebAuthnException.CoreException.NotAllowedException).errorCode).isEqualTo(code)
+                // Consumers read the original handler exception off `cause` to recover the biometric
+                // error code. Dropping or re-wrapping it is a breaking change.
+                assertThat(e.cause).isSameInstanceAs(thrown)
+            }
+        }
+    }
+
+    @Test
+    fun `a genuine biometric error stays a plain NotAllowedException with its error code`() {
+        val thrown = AuthenticationHandler.AuthenticationErrorException(
+            errorCode = BiometricPrompt.ERROR_HW_UNAVAILABLE,
+            message = "hardware unavailable"
+        )
+        coEvery { mockAuthenticationHandler.authenticate(any(), any(), any()) } throws thrown
+
+        runBlocking {
+            val result = authenticator.getAssertion(mockActivity, registeredRpEntity.id, dummyByteArray, null, null)
+
+            val e = result.exceptionOrNull()
+            assertThat(e).isInstanceOf(WebAuthnException.CoreException.NotAllowedException::class.java)
+            assertThat(e).isNotInstanceOf(WebAuthnException.CoreException.UserCancelledException::class.java)
+            assertThat((e as WebAuthnException.CoreException.NotAllowedException).errorCode)
+                .isEqualTo(BiometricPrompt.ERROR_HW_UNAVAILABLE)
+            assertThat(e.cause).isSameInstanceAs(thrown)
+        }
+    }
+
+    @Test
+    fun `a permanently invalidated key is reported as such, not as a cancellation`() {
+        // Guards the mapping rather than the handler: this passes whether or not
+        // `DeviceCredentialAuthenticationHandler` wraps the exception, because it is injected at the handler
+        // boundary. Its job is to keep the `KeyPermanentlyInvalidatedException` branch reachable if the order
+        // of `authenticate`'s catch clauses is ever rearranged - the AuthenticationErrorException branch
+        // matches first and would swallow a subtype of it.
+        val thrown = android.security.keystore.KeyPermanentlyInvalidatedException()
+        coEvery { mockAuthenticationHandler.authenticate(any(), any(), any()) } throws thrown
+
+        runBlocking {
+            val result = authenticator.getAssertion(mockActivity, registeredRpEntity.id, dummyByteArray, null, null)
+
+            val e = result.exceptionOrNull()
+            assertThat(e)
+                .isInstanceOf(WebAuthnException.AuthenticationException.KeyPermanentlyInvalidatedException::class.java)
+            // The two outcomes that would make re-registration undiscoverable: a bare NotAllowedException
+            // looks like any other refusal, and UnknownException tells the app nothing at all.
+            assertThat(e).isNotInstanceOf(WebAuthnException.CoreException.NotAllowedException::class.java)
+            assertThat(e).isNotInstanceOf(WebAuthnException.UnknownException::class.java)
+            assertThat(e?.cause).isSameInstanceAs(thrown)
+        }
+        // The throwing stub is restored in `afterEachTearDown`, not here, so a failed assertion above
+        // cannot leak it into the tests that follow.
+    }
+
+    @Test
+    fun `ConstraintException reports the canAuthenticate status that caused it`() {
+        every { mockAuthenticationHandler.isSupported(mockContext) } returns false
+        every {
+            mockAuthenticationHandler.canAuthenticateStatus(mockContext)
+        } returns BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED
+
+        runBlocking {
+            val result = authenticator.getAssertion(mockActivity, registeredRpEntity.id, dummyByteArray, null, null)
+
+            val e = result.exceptionOrNull()
+            assertThat(e).isInstanceOf(WebAuthnException.CoreException.ConstraintException::class.java)
+            assertThat((e as WebAuthnException.CoreException.ConstraintException).canAuthenticateStatus)
+                .isEqualTo(BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED)
+        }
+    }
+
+    @Test
+    fun `a keystore rejection surfaces as KeyGenerationException rather than UnknownException`() {
+        val thrown = java.security.ProviderException("Failed to generate key pair.")
+        every { mockKeyGenerator.generateFido2Key(any(), any(), any(), any()) } throws thrown
+
+        runBlocking {
+            val result = authenticator.makeCredential(
+                mockActivity,
+                dummyHash,
+                dummyRpEntity,
+                dummyUserEntity,
+                listOf(es256CredParams),
+                listOf(registeredCredDescriptor),
+                null
+            )
+
+            val e = result.exceptionOrNull()
+            assertThat(e).isInstanceOf(WebAuthnException.KeyGenerationException::class.java)
+            assertThat(e).isInstanceOf(WebAuthnException.SecureExecutionException::class.java)
+            assertThat(e).isNotInstanceOf(WebAuthnException.UnknownException::class.java)
+            assertThat(e).hasMessageThat().contains("strongBoxRequested=")
+            // The in-tree consumer reads the platform exception off `cause`; re-wrapping or dropping it
+            // is a breaking change, so the identity is pinned here as well.
+            assertThat(e?.cause).isSameInstanceAs(thrown)
+        }
+        // The throwing stub is restored in `afterEachTearDown`, not here, so a failed assertion above
+        // cannot leak it into the tests that follow.
+    }
+
+    @Test
+    fun `a keystore rejection reachable only through suppressed is still recognised`() {
+        // The shape `generateWithStrongBoxFallback` produces when the TEE retry fails with something that
+        // is not itself a keystore rejection: the StrongBox failure - the one carrying the KeyMint code -
+        // rides on `suppressed`, not on `cause`. A cause-only classifier would miss it.
+        val strongBoxFailure = java.security.ProviderException("Failed to generate key pair.")
+        val retryFailure = IllegalStateException("retry failed").apply { addSuppressed(strongBoxFailure) }
+        every { mockKeyGenerator.generateFido2Key(any(), any(), any(), any()) } throws retryFailure
+
+        runBlocking {
+            val result = authenticator.makeCredential(
+                mockActivity,
+                dummyHash,
+                dummyRpEntity,
+                dummyUserEntity,
+                listOf(es256CredParams),
+                listOf(registeredCredDescriptor),
+                null
+            )
+
+            val e = result.exceptionOrNull()
+            assertThat(e).isInstanceOf(WebAuthnException.KeyGenerationException::class.java)
+            assertThat(e?.cause).isSameInstanceAs(retryFailure)
+        }
+    }
+
+    @Test
+    fun `a pre-flight failure survives a cleanup that fails over state it never created`() {
+        // The exclude-list check runs before key generation, and the database row is written after it, so
+        // the cleanup that follows deletes an id that was never stored. `CredentialSourceStorage.delete`
+        // is not required to be idempotent. A consumer that rejects an unknown id must not have its
+        // InvalidStateException replaced by a DeletionException, which would erase the distinction
+        // consumers route on to tell "already registered" apart from a real deletion fault.
+        val deleteFailure = IllegalStateException("no row for that credId")
+        val cleanupFailingDb = object : CredentialSourceStorage by mockFido2Database {
+            override fun delete(credId: String): Unit = throw deleteFailure
+        }
+        val cleanupFailingAuthenticator = Authenticator(
+            db = cleanupFailingDb,
+            authenticationHandler = mockAuthenticationHandler,
+            fido2KeyGenerator = mockKeyGenerator,
+            fido2ObjectGenerator = mockObjectGenerator,
+            authType = AuthenticatorType.BiometricAndroidKey,
+        )
+
+        runBlocking {
+            val result = cleanupFailingAuthenticator.makeCredential(
+                mockActivity,
+                dummyHash,
+                registeredRpEntity,
+                registeredUserEntity,
+                listOf(es256CredParams),
+                listOf(registeredCredDescriptor),
+                null
+            )
+
+            val e = result.exceptionOrNull()
+            assertThat(e).isInstanceOf(WebAuthnException.CoreException.InvalidStateException::class.java)
+            assertThat(e).isNotInstanceOf(WebAuthnException.DeletionException::class.java)
+            // Demoted, not dropped: the storage fault is still printed with the stack trace. Compared by
+            // type and message rather than identity, because the consumer's throwable crosses the database
+            // dispatcher and kotlinx.coroutines' stack-trace recovery copies any exception that declares
+            // no fields of its own, and IllegalStateException declares none.
+            val suppressed = e?.suppressed?.toList()
+            assertThat(suppressed).hasSize(1)
+            assertThat(suppressed?.first()).isInstanceOf(WebAuthnException.CredSrcStorageException::class.java)
+            assertThat(suppressed?.first()?.cause).isInstanceOf(IllegalStateException::class.java)
+            assertThat(suppressed?.first()?.cause).hasMessageThat().isEqualTo(deleteFailure.message)
+        }
+    }
+
+    @Test
+    fun `the key generator retries without StrongBox when the platform rejects the request`() {
+        val attempts = mutableListOf<Boolean>()
+        val recordingGenerator = object : Fido2KeyGenerator() {
+            override fun generateFido2Key(
+                keyAlias: String,
+                challenge: ByteArray?,
+                publicKeyAlgorithm: COSEAlgorithmIdentifier,
+                isStrongBoxBacked: Boolean,
+                userAuthenticationRequired: Boolean
+            ): KeyPair = generateWithStrongBoxFallback(isStrongBoxBacked) { strongBox ->
+                attempts.add(strongBox)
+                if (strongBox) throw java.security.ProviderException("Failed to generate key pair.")
+                dummyKeyPair
+            }
+        }
+
+        val keyPair = recordingGenerator.generateFido2Key(
+            keyAlias = "alias",
+            challenge = null,
+            publicKeyAlgorithm = COSEAlgorithmIdentifier.ES256,
+            isStrongBoxBacked = true
+        )
+
+        assertThat(keyPair).isSameInstanceAs(dummyKeyPair)
+        assertThat(attempts).containsExactly(true, false).inOrder()
+    }
+
+    @Test
+    fun `BiometricKeyGenerator routes both StrongBox attempts through the shared fallback`() {
+        val generator = spyk(BiometricKeyGenerator(), recordPrivateCalls = true)
+        val attempts = mutableListOf<Boolean>()
+        every {
+            generator["generateBiometricFido2Key"](
+                any<String>(),
+                any<ByteArray>(),
+                any<COSEAlgorithmIdentifier>(),
+                any<Boolean>(),
+                any<Boolean>()
+            )
+        } answers {
+            val strongBoxBacked = arg<Boolean>(3)
+            attempts.add(strongBoxBacked)
+            if (strongBoxBacked) throw java.security.ProviderException("Failed to generate key pair.")
+            dummyKeyPair
+        }
+
+        val keyPair = generator.generateFido2Key(
+            keyAlias = "alias",
+            challenge = null,
+            publicKeyAlgorithm = COSEAlgorithmIdentifier.ES256,
+            isStrongBoxBacked = true
+        )
+
+        assertThat(keyPair).isSameInstanceAs(dummyKeyPair)
+        assertThat(attempts).containsExactly(true, false).inOrder()
+    }
+
+    @Test
+    fun `DeviceCredentialKeyGenerator routes both StrongBox attempts through the shared fallback`() {
+        val generator = spyk(DeviceCredentialKeyGenerator(), recordPrivateCalls = true)
+        val attempts = mutableListOf<Boolean>()
+        every {
+            generator["generateDeviceCredentialFido2Key"](
+                any<String>(),
+                any<ByteArray>(),
+                any<COSEAlgorithmIdentifier>(),
+                any<Boolean>(),
+                any<Boolean>(),
+                any<Int>()
+            )
+        } answers {
+            val strongBoxBacked = arg<Boolean>(3)
+            attempts.add(strongBoxBacked)
+            if (strongBoxBacked) throw java.security.ProviderException("Failed to generate key pair.")
+            dummyKeyPair
+        }
+
+        val keyPair = generator.generateFido2Key(
+            keyAlias = "alias",
+            challenge = null,
+            publicKeyAlgorithm = COSEAlgorithmIdentifier.ES256,
+            isStrongBoxBacked = true
+        )
+
+        assertThat(keyPair).isSameInstanceAs(dummyKeyPair)
+        assertThat(attempts).containsExactly(true, false).inOrder()
+    }
+
+    @Test
+    fun `a generator that requested no StrongBox makes a single attempt`() {
+        val generator = spyk(BiometricKeyGenerator(), recordPrivateCalls = true)
+        val attempts = mutableListOf<Boolean>()
+        every {
+            generator["generateBiometricFido2Key"](
+                any<String>(),
+                any<ByteArray>(),
+                any<COSEAlgorithmIdentifier>(),
+                any<Boolean>(),
+                any<Boolean>()
+            )
+        } answers {
+            attempts.add(arg(3))
+            throw java.security.ProviderException("Failed to generate key pair.")
+        }
+
+        // A device that never advertised StrongBox has nothing to fall back to: the failure must
+        // propagate on the first attempt rather than being retried identically.
+        val thrown = Assertions.assertThrows(java.security.ProviderException::class.java) {
+            generator.generateFido2Key(
+                keyAlias = "alias",
+                challenge = null,
+                publicKeyAlgorithm = COSEAlgorithmIdentifier.ES256,
+                isStrongBoxBacked = false
+            )
+        }
+
+        assertThat(attempts).containsExactly(false)
+        assertThat(thrown.suppressed).isEmpty()
+    }
+
+    @Test
+    fun `cleanup deletes the key under the same alias the key was created with`() {
+        val deletedAliases = mutableListOf<String>()
+        every { SecureExecutionHelper.deleteKey(capture(deletedAliases)) } returns Unit
+
+        runBlocking { authenticator.cleanup(registeredCredId) }
+
+        assertThat(deletedAliases).containsExactly(registeredCredId)
+        // The regression this pins down: `credId` is already base64url and `makeCredential` uses it
+        // verbatim as the KeyStore alias, so encoding it a second time names an alias no key was ever
+        // stored under - and `KeyStore.deleteEntry` no-ops silently on a missing alias, so cleanup
+        // reported success while leaving the private key behind.
+        val doubleEncoded = registeredCredId.toBase64url()
+        assertThat(deletedAliases).doesNotContain(doubleEncoded)
+        // These two are the part that can fail independently of the assertion above, because they are
+        // statements about `Encoding.kt` rather than about the captured list: the `ByteArray` and `String`
+        // overloads of `toBase64url` must keep producing different aliases for 43 and 58 characters
+        // respectively. Were `String.toBase64url` ever "fixed" into a passthrough - the wrong file to
+        // change - the old double-encoding call site would satisfy every assertion above it while the
+        // defect went unnoticed.
+        assertThat(registeredCredId).hasLength(43)
+        assertThat(doubleEncoded).hasLength(58)
+        assertThat(mockFido2Database.load(registeredCredId)).isNull()
+    }
+
+    @Test
+    fun `cleanup propagates a genuine key deletion failure instead of swallowing it`() {
+        val thrown = WebAuthnException.SecureExecutionException("Cannot delete key from KeyStore.")
+        every { SecureExecutionHelper.deleteKey(registeredCredId) } throws thrown
+
+        // This is the property that stops "reported success while the key survived" from coming back by
+        // another route. A caller that cannot see the deletion failure cannot retry it:
+        // `handleMakeCredentialException` would report the registration failure alone and the private key
+        // would stay on the device forever. A future well-meaning
+        // `try { deleteKey(credId) } catch (e: Exception) { }` has to break this test.
+        val caught = Assertions.assertThrows(WebAuthnException.SecureExecutionException::class.java) {
+            runBlocking { authenticator.cleanup(registeredCredId) }
+        }
+
+        assertThat(caught).isSameInstanceAs(thrown)
+        // The row has to survive too. Deleting it while the key is still present is exactly what made the
+        // orphaned keys unrecoverable: the credential ID is the only name the alias ever had.
+        assertThat(mockFido2Database.load(registeredCredId)).isNotNull()
+    }
+
+    @Test
+    fun `retryCleanup succeeds when the first attempt deleted the key and then failed on the database`() {
+        // The precise sequence `cleanup`'s KDoc cites as the reason deleting an absent alias must count as
+        // success: attempt 1 removes the key and then throws on the row, so attempt 2 necessarily runs
+        // against an alias that is legitimately already gone. A `cleanup` that treated that as an error
+        // would turn a recoverable database blip into a `DeletionException` that replaces the failure
+        // which triggered cleanup in the first place. That the keystore tolerates the second call is
+        // platform behaviour, asserted on device by `CleanupAliasTest`; here the keystore is mocked, so
+        // what this pins is that `retryCleanup` retries the row and reports success.
+        val deletedAliases = mutableListOf<String>()
+        var dbDeleteCalls = 0
+        val flakyDb = object : CredentialSourceStorage by mockFido2Database {
+            override fun delete(credId: String) {
+                dbDeleteCalls++
+                if (dbDeleteCalls == 1) {
+                    throw IllegalStateException("the row is locked")
+                }
+                mockFido2Database.delete(credId)
+            }
+        }
+        every { SecureExecutionHelper.deleteKey(capture(deletedAliases)) } returns Unit
+        val retryingAuthenticator = Authenticator(
+            db = flakyDb,
+            authenticationHandler = mockAuthenticationHandler,
+            fido2KeyGenerator = mockKeyGenerator,
+            fido2ObjectGenerator = mockObjectGenerator,
+            authType = AuthenticatorType.BiometricAndroidKey,
+        )
+
+        runBlocking { retryingAuthenticator.retryCleanup(registeredCredId, maxTries = 2, delayMillis = 0) }
+
+        assertThat(dbDeleteCalls).isEqualTo(2)
+        // Both attempts ask the keystore for the same alias, and the second one is the pass that has to be
+        // harmless. Always the credential id, never a re-encoded form of it.
+        assertThat(deletedAliases).containsExactly(registeredCredId, registeredCredId)
+        assertThat(mockFido2Database.load(registeredCredId)).isNull()
     }
 }

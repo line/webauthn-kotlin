@@ -19,7 +19,6 @@ package com.linecorp.webauthn.authenticator.keygenerator
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.security.keystore.StrongBoxUnavailableException
 import com.linecorp.webauthn.model.COSEAlgorithmIdentifier
 import com.linecorp.webauthn.model.getAlgorithmParameterSpec
 import com.linecorp.webauthn.model.getDigests
@@ -36,28 +35,8 @@ class DeviceCredentialKeyGenerator : Fido2KeyGenerator() {
         publicKeyAlgorithm: COSEAlgorithmIdentifier,
         isStrongBoxBacked: Boolean,
         userAuthenticationRequired: Boolean
-    ): KeyPair {
-        return if (isStrongBoxBacked) {
-            return try {
-                generateDeviceCredentialFido2Key(
-                    keyAlias,
-                    challenge,
-                    publicKeyAlgorithm,
-                    true,
-                    userAuthenticationRequired
-                )
-            } catch (e: StrongBoxUnavailableException) {
-                generateDeviceCredentialFido2Key(
-                    keyAlias,
-                    challenge,
-                    publicKeyAlgorithm,
-                    false,
-                    userAuthenticationRequired
-                )
-            }
-        } else {
-            generateDeviceCredentialFido2Key(keyAlias, challenge, publicKeyAlgorithm, false, userAuthenticationRequired)
-        }
+    ): KeyPair = generateWithStrongBoxFallback(isStrongBoxBacked) { strongBox ->
+        generateDeviceCredentialFido2Key(keyAlias, challenge, publicKeyAlgorithm, strongBox, userAuthenticationRequired)
     }
 
     private fun generateDeviceCredentialFido2Key(

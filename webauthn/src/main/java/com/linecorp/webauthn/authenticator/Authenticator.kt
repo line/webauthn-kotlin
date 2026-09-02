@@ -16,13 +16,18 @@
 
 package com.linecorp.webauthn.authenticator
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.fragment.app.FragmentActivity
 import com.linecorp.webauthn.authenticator.keygenerator.Fido2KeyGenerator
 import com.linecorp.webauthn.authenticator.objectgenerator.Fido2ObjectGenerator
 import com.linecorp.webauthn.db.CredentialSourceStorage
 import com.linecorp.webauthn.exceptions.WebAuthnException
+import com.linecorp.webauthn.handler.AuthenticationCapability
 import com.linecorp.webauthn.handler.AuthenticationHandler
 import com.linecorp.webauthn.model.AssertionObject
 import com.linecorp.webauthn.model.AttestationObject
@@ -51,6 +56,7 @@ import java.security.PrivateKey
 import java.security.Signature
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
@@ -98,6 +104,8 @@ internal class Authenticator(
         extensions: AuthenticatorExtensionsInput?,
     ): Result<AuthenticatorMakeCredentialResult> {
         val (credIdBytes: ByteArray, credId: String) = generateUniqueCredId()
+        var strongBoxRequested = false
+        var keyCommitted = false
         try {
             val credTypeAndPubKeyAlg: PublicKeyCredentialParams = fetchCredTypeAndPubKeyAlg(credTypesAndPubKeyAlgs)
             checkCredentialWasNotRegistered(rpEntity.id, excludeCredDescriptorList)
@@ -114,11 +122,15 @@ internal class Authenticator(
 
             val fmt = authType.getAttestationStatementFormat()
             val challenge = if (fmt != AttestationStatementFormat.NONE) hash else null
+            strongBoxRequested = isStrongBoxSupported(activity.applicationContext)
+            // Raised before the call, because a generator that created the alias and then threw has
+            // still left a key behind. Cleanup has to be able to report a failure to remove it.
+            keyCommitted = true
             val keyPair = fido2KeyGenerator.generateFido2Key(
                 keyAlias = keyAlias,
                 challenge = challenge,
                 publicKeyAlgorithm = credTypeAndPubKeyAlg.alg,
-                isStrongBoxBacked = isStrongBoxSupported(activity.applicationContext),
+                isStrongBoxBacked = strongBoxRequested,
             )
 
             val fido2UserAuthResult = if (fmt != AttestationStatementFormat.NONE) {
@@ -149,7 +161,7 @@ internal class Authenticator(
                 )
             )
         } catch (e: Throwable) {
-            return handleMakeCredentialException(e, credId)
+            return handleMakeCredentialException(e, credId, strongBoxRequested, keyCommitted)
         }
     }
 
@@ -233,16 +245,32 @@ internal class Authenticator(
                 )
             )
         } catch (e: Exception) {
-            val authenticatorException = if (e is WebAuthnException) {
-                e
-            } else {
-                WebAuthnException.UnknownException(
-                    message = "An unknown error occurred.",
-                    cause = e
-                )
-            }
-            return Result.failure(authenticatorException)
+            return Result.failure(classifyAssertionFailure(e))
         }
+    }
+
+    /**
+     * Classifies a `getAssertion` failure, matching what `handleMakeCredentialException` does for a
+     * registration failure so that a wedged keystore is equally diagnosable from either ceremony.
+     *
+     * This path reaches the keystore twice, through [SecureExecutionHelper.getKey] and
+     * [SecureExecutionHelper.getX509Certificate]. Both wrap a platform fault in
+     * [WebAuthnException.SecureExecutionException], which carries neither the numeric KeyMint code nor
+     * the device fields needed to attribute it.
+     */
+    private fun classifyAssertionFailure(e: Throwable): WebAuthnException = when {
+        e is WebAuthnException.KeyGenerationException -> e
+        e.isKeystoreRejection() -> WebAuthnException.KeyGenerationException(
+            message = "The platform keystore rejected an operation during authentication: " +
+                "${e::class.java.name}. authType=$authType, model=${Build.MODEL}, " +
+                "sdk=${Build.VERSION.SDK_INT}: ${e.message}",
+            cause = e
+        ).apply { keyStoreErrorCode = e.numericKeyStoreErrorCode() }
+        e is WebAuthnException -> e
+        else -> WebAuthnException.UnknownException(
+            message = "An unknown error occurred.",
+            cause = e
+        )
     }
 
     /**
@@ -299,11 +327,23 @@ internal class Authenticator(
      * @throws WebAuthnException.CoreException.ConstraintException If authentication is not supported by the device.
      */
     private fun checkAuthenticationSupport(context: Context) {
-        if (!authenticationHandler.isSupported(context)) {
-            throw WebAuthnException.CoreException.ConstraintException(
-                message = "Authentication is not supported by a device."
-            )
+        if (authenticationHandler.isSupported(context)) {
+            return
         }
+        // Read for the diagnostic only, after the decision, and deliberately unable to change it. The
+        // device state can move between the two reads - a fingerprint enrolled from the notification
+        // shade - so a BIOMETRIC_SUCCESS here would contradict the failure being reported and is dropped
+        // instead of attached. A throw is swallowed for the same reason: below API 30 this re-enters
+        // KeyguardManagerWrapper's unchecked system-service cast, and letting that escape would replace
+        // the ConstraintException the caller routes on with an UnknownException.
+        val status = runCatching {
+            (authenticationHandler as? AuthenticationCapability)?.canAuthenticateStatus(context)
+        }.getOrNull()?.takeIf { it != BiometricManager.BIOMETRIC_SUCCESS }
+        throw WebAuthnException.CoreException.ConstraintException(
+            message = "Authentication is not supported by a device. " +
+                "canAuthenticateStatus=$status, authType=$authType, " +
+                "model=${Build.MODEL}, sdk=${Build.VERSION.SDK_INT}"
+        ).apply { canAuthenticateStatus = status }
     }
 
     /**
@@ -408,6 +448,7 @@ internal class Authenticator(
      * @param signatureProvider The provider for the signature.
      * @return The result of the user authentication.
      * @throws WebAuthnException.CoreException.NotAllowedException If authentication fails or if an authentication error occurs.
+     * @throws WebAuthnException.CoreException.UserCancelledException If the user dismissed the prompt.
      */
     private suspend fun authenticate(
         activity: FragmentActivity,
@@ -421,12 +462,21 @@ internal class Authenticator(
             throw WebAuthnException.CoreException.NotAllowedException(
                 message = "Authentication failed",
                 cause = e
-            )
+            ).apply { errorCode = e.errorCode }
         } catch (e: AuthenticationHandler.AuthenticationErrorException) {
-            throw WebAuthnException.CoreException.NotAllowedException(
-                message = "Authentication error is occurred.",
-                cause = e
-            )
+            val errorCode = e.errorCode
+            val exception = if (errorCode != null && errorCode in USER_CANCELLED_ERROR_CODES) {
+                WebAuthnException.CoreException.UserCancelledException(
+                    message = "The user cancelled the authentication prompt. errorCode=$errorCode",
+                    cause = e
+                )
+            } else {
+                WebAuthnException.CoreException.NotAllowedException(
+                    message = "Authentication error is occurred. errorCode=$errorCode",
+                    cause = e
+                )
+            }
+            throw exception.apply { this.errorCode = errorCode }
         } catch (e: android.security.keystore.KeyPermanentlyInvalidatedException) {
             throw WebAuthnException.AuthenticationException.KeyPermanentlyInvalidatedException(
                 cause = e
@@ -435,20 +485,34 @@ internal class Authenticator(
     }
 
     /**
-     * Cleans up by deleting a unnecessary credential.
+     * Deletes a credential's key material and its database row.
      *
-     * @param credId The credential ID.
+     * [credId] **is** the KeyStore alias, used verbatim; it is already base64url. Encoding it again names
+     * an alias no key was stored under, and `KeyStore.deleteEntry` is a silent no-op for an unknown alias,
+     * so cleanup would report success and leave the private key behind.
+     *
+     * Deleting an alias that is already gone is not an error, so [retryCleanup]'s second attempt - which
+     * legitimately finds the key deleted by the first - cannot replace the failure that triggered cleanup.
+     * That is the platform's behaviour rather than something guarded for here: `AndroidKeyStoreSpi`
+     * reports `KEY_NOT_FOUND` as success on both keystore generations this SDK supports. Pinned on device
+     * by `CleanupAliasTest.deleteKeyIsANoOpForAnAliasThatIsAlreadyGone`.
+     *
+     * The key deletion is deliberately a plain blocking call rather than a dispatched one: it has no
+     * suspension point, so it runs to completion even when the calling scope is already cancelled. Moving
+     * it behind a `withContext` would make it skippable and strand a private key whose only name is
+     * [credId].
+     *
+     * @param credId The credential ID, which is also the KeyStore alias of the credential's private key.
      * @throws WebAuthnException.CredSrcStorageException If there is an error deleting the credential from the database.
      */
     suspend fun cleanup(credId: String) {
-        val keyAlias = credId.toBase64url()
-        SecureExecutionHelper.deleteKey(keyAlias)
-        try {
-            withContext(databaseDispatcher) {
+        withContext(NonCancellable + databaseDispatcher) {
+            SecureExecutionHelper.deleteKey(credId)
+            try {
                 db.delete(credId = credId)
+            } catch (e: Exception) {
+                throw WebAuthnException.CredSrcStorageException("Failed to delete credential for credId: $credId", e)
             }
-        } catch (e: Exception) {
-            throw WebAuthnException.CredSrcStorageException("Failed to delete credential for credId: $credId", e)
         }
     }
 
@@ -499,16 +563,27 @@ internal class Authenticator(
      *
      * @param e The exception that occurred.
      * @param credId The credential ID related to the exception.
+     * @param strongBoxRequested Whether the key was requested StrongBox-backed, for diagnostics.
+     * @param keyCommitted Whether key generation for [credId] was reached, so a key may exist under that
+     * alias. Cleanup runs either way; only when generation was never reached is a cleanup failure carried
+     * on the original exception instead of replacing it.
      * @return A failure result containing the exception.
      */
     private suspend fun handleMakeCredentialException(
         e: Throwable,
-        credId: String
+        credId: String,
+        strongBoxRequested: Boolean,
+        keyCommitted: Boolean,
     ): Result<AuthenticatorMakeCredentialResult> {
-        val authenticatorException = if (e is WebAuthnException) {
-            e
-        } else {
-            WebAuthnException.UnknownException(
+        val authenticatorException = when {
+            e is WebAuthnException -> e
+            e.isKeystoreRejection() -> WebAuthnException.KeyGenerationException(
+                message = "The platform keystore rejected an operation during credential creation: " +
+                    "${e::class.java.name}. authType=$authType, strongBoxRequested=$strongBoxRequested, " +
+                    "model=${Build.MODEL}, sdk=${Build.VERSION.SDK_INT}: ${e.message}",
+                cause = e
+            ).apply { keyStoreErrorCode = e.numericKeyStoreErrorCode() }
+            else -> WebAuthnException.UnknownException(
                 message = "An unknown error occurred.",
                 cause = e
             )
@@ -518,13 +593,25 @@ internal class Authenticator(
             retryCleanup(credId, maxTries = 2, delayMillis = 1000)
             Result.failure(authenticatorException)
         } catch (e2: Throwable) {
-            Result.failure(
-                WebAuthnException.DeletionException(
-                    "Error occurred while deleting key: $e2",
-                    cause = e2,
-                    trigger = authenticatorException
+            if (keyCommitted) {
+                Result.failure(
+                    WebAuthnException.DeletionException(
+                        "Error occurred while deleting key: $e2",
+                        cause = e2,
+                        trigger = authenticatorException
+                    )
                 )
-            )
+            } else {
+                // Reached only for a failure before key generation was attempted, so there is no key to
+                // strand. Cleanup still runs, because the row may exist. Only the reported failure changes -
+                // `CredentialSourceStorage.delete` is not required to be idempotent, and a consumer that
+                // throws for an unknown id must not turn a pre-flight ConstraintException, which the caller
+                // routes to biometric enrolment, into a DeletionException.
+                if (authenticatorException !== e2) {
+                    authenticatorException.addSuppressed(e2)
+                }
+                Result.failure(authenticatorException)
+            }
         }
     }
 
@@ -536,4 +623,77 @@ internal class Authenticator(
      */
     private fun isStrongBoxSupported(context: Context): Boolean =
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
+
+    /**
+     * Every throwable reachable from [this], following `cause` before `suppressed`, never revisiting a node.
+     *
+     * `suppressed` is walked because [com.linecorp.webauthn.authenticator.keygenerator.Fido2KeyGenerator]
+     * carries the StrongBox attempt's failure there, so a keystore rejection reachable only that way is
+     * still recognised. The `cause` chain is explored first, so when both attempts failed with a keystore
+     * fault the reported code is the final one - the TEE retry's - not the StrongBox attempt's. Node
+     * identity is compared with `===` so an exception overriding `equals` cannot collapse distinct links,
+     * and cyclic `cause` chains terminate.
+     */
+    private fun Throwable.selfAndNested(): List<Throwable> {
+        val visited = mutableListOf<Throwable>()
+        val pending = ArrayDeque<Throwable>()
+        pending.addLast(this)
+        while (pending.isNotEmpty()) {
+            val current = pending.removeLast()
+            if (visited.any { it === current }) {
+                continue
+            }
+            visited.add(current)
+            // Pushed first, so they are popped last: the cause chain is explored ahead of suppressed.
+            current.suppressed.forEach { pending.addLast(it) }
+            current.cause?.let { pending.addLast(it) }
+        }
+        return visited
+    }
+
+    private fun Throwable.isKeystoreRejection(): Boolean = selfAndNested().any { it.isKeystoreFailureType() }
+
+    /**
+     * `android.security.KeyStoreException` entered the public SDK in API 33, so lint rejects naming it
+     * against this module's minSdk of 28. The `is` test is still safe on 28-32: the class is present in the
+     * platform there as a non-SDK class rather than absent - it is what the AndroidKeyStore provider wraps
+     * its KeyMint failures in - and ART's hidden-API enforcement is per-member, so resolving the type for an
+     * `is` test succeeds. Only `getNumericErrorCode` is genuinely new, and it is guarded on `SDK_INT` in
+     * [numericKeyStoreErrorCode].
+     *
+     * Kept as its own function so the suppression covers these type tests and nothing else.
+     */
+    @SuppressLint("NewApi")
+    private fun Throwable.isKeystoreFailureType(): Boolean = this is java.security.ProviderException ||
+        this is android.security.KeyStoreException ||
+        this is java.security.KeyStoreException
+
+    /** `android.security.KeyStoreException.getNumericErrorCode()` was added in API 33, hence the guard. */
+    private fun Throwable.numericKeyStoreErrorCode(): Int? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return null
+        }
+        for (current in selfAndNested()) {
+            if (current is android.security.KeyStoreException) {
+                return current.numericErrorCode
+            }
+        }
+        return null
+    }
+
+    private companion object {
+        /**
+         * `BiometricPrompt` error codes that mean the ceremony ended without the user completing it.
+         *
+         * ERROR_CANCELED is broader than a deliberate dismissal: androidx documents it as the sensor being
+         * unavailable, and its own `BiometricFragment.onStop()` forwards it when the host activity stops or
+         * the device locks. It is kept in the set because real user cancellations arrive with it, at the
+         * cost of surfacing a lifecycle cancellation as user intent.
+         */
+        private val USER_CANCELLED_ERROR_CODES = setOf(
+            BiometricPrompt.ERROR_CANCELED,
+            BiometricPrompt.ERROR_USER_CANCELED,
+            BiometricPrompt.ERROR_NEGATIVE_BUTTON
+        )
+    }
 }

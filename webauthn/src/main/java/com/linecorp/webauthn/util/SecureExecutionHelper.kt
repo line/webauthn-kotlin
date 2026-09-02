@@ -23,9 +23,6 @@ import java.security.KeyStoreException
 import java.security.PublicKey
 import java.security.cert.X509Certificate
 
-/**
- * Helper class for secure execution
- */
 internal object SecureExecutionHelper {
     private val lock = Any()
 

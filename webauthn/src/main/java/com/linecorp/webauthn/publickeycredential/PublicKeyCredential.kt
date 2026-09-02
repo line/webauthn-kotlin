@@ -16,12 +16,17 @@
 
 package com.linecorp.webauthn.publickeycredential
 
+import android.content.Context
 import androidx.fragment.app.FragmentActivity
 import com.linecorp.webauthn.authenticator.Authenticator
 import com.linecorp.webauthn.authenticator.AuthenticatorProvider
 import com.linecorp.webauthn.db.CredentialSourceStorage
 import com.linecorp.webauthn.exceptions.WebAuthnException
+import com.linecorp.webauthn.handler.AuthenticationCapability
+import com.linecorp.webauthn.handler.BiometricAuthenticationHandler
+import com.linecorp.webauthn.handler.DeviceCredentialAuthenticationHandler
 import com.linecorp.webauthn.model.AttestationStatementFormat
+import com.linecorp.webauthn.model.AuthenticationAvailability
 import com.linecorp.webauthn.model.AuthenticationMethod
 import com.linecorp.webauthn.model.AuthenticatorAssertionResponse
 import com.linecorp.webauthn.model.AuthenticatorAttestationResponse
@@ -45,6 +50,7 @@ import com.linecorp.webauthn.rp.RelyingParty
 import com.linecorp.webauthn.util.Fido2Util
 import com.linecorp.webauthn.util.toBase64url
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -76,6 +82,46 @@ class PublicKeyCredential(
          * Mutex to ensure that create and get operations are thread-safe.
          */
         private val mutex = Mutex()
+
+        /**
+         * Reports whether [authenticationMethod] can be used on this device right now.
+         *
+         * Call this before [create] to gate your UI. `create()` throws
+         * [WebAuthnException.CoreException.ConstraintException] when authentication is unavailable,
+         * which is an expected device state rather than an error worth reporting.
+         *
+         * It answers whether the user can authenticate at all, not whether an already registered
+         * credential is still usable: re-enrolling a biometric invalidates the credential's key while
+         * leaving this result [AuthenticationAvailability.Reason.AVAILABLE], so [get] can still fail with
+         * [WebAuthnException.AuthenticationException.KeyPermanentlyInvalidatedException].
+         *
+         * This function does not throw. If the platform query itself fails, the result is
+         * [AuthenticationAvailability.Reason.UNKNOWN] with a null
+         * [AuthenticationAvailability.status]. It queries the platform synchronously, so treat it as a
+         * cheap-but-not-free binder call rather than something to poll.
+         */
+        @JvmStatic
+        fun checkAuthenticationAvailability(
+            context: Context,
+            authenticationMethod: AuthenticationMethod
+        ): AuthenticationAvailability {
+            val handler: AuthenticationCapability = when (authenticationMethod) {
+                AuthenticationMethod.Biometric -> BiometricAuthenticationHandler()
+                AuthenticationMethod.DeviceCredential -> DeviceCredentialAuthenticationHandler()
+            }
+            return try {
+                AuthenticationAvailability.fromStatus(handler.canAuthenticateStatus(context))
+            } catch (e: Exception) {
+                // Below API 30 the device-credential path reaches KeyguardManager through an unchecked
+                // cast, so a device with no keyguard service throws here. UNKNOWN rather than NO_HARDWARE:
+                // an arbitrary failure is not an observation about the device's hardware.
+                AuthenticationAvailability(
+                    isAvailable = false,
+                    status = null,
+                    reason = AuthenticationAvailability.Reason.UNKNOWN
+                )
+            }
+        }
     }
 
     internal lateinit var authenticator: Authenticator
@@ -202,61 +248,99 @@ class PublicKeyCredential(
     /**
      * Retrieves all registered accounts.
      *
+     * Every stored credential is returned exactly once, whichever authenticator type registered it.
+     *
      * @return List of all registered PublicKeyCredentialSource.
      * @throws WebAuthnException.CredSrcStorageException If there is an error loading credentials from the database.
      */
-    suspend fun getAllAccounts(): List<com.linecorp.webauthn.model.PublicKeyCredentialSource> {
-        val result = mutableListOf<com.linecorp.webauthn.model.PublicKeyCredentialSource>()
-        for (authMethod in AuthenticationMethod.entries) {
-            for (fmt in AttestationStatementFormat.entries) {
-                val authenticator = authenticatorProvider.getAuthenticator(
-                    authenticationMethod = authMethod,
-                    attestationStatement = fmt,
-                    fido2PromptInfo = null,
-                )
-                val credentials: List<com.linecorp.webauthn.model.PublicKeyCredentialSource> = try {
-                    withContext(databaseDispatcher) {
-                        authenticator.db.loadAll()
-                    }
-                } catch (e: Exception) {
-                    throw WebAuthnException.CredSrcStorageException(
-                        "Failed to load credentials for authenticator type: ${authenticator.authType}",
-                        e
-                    )
-                }
-                result.addAll(credentials)
-            }
+    suspend fun getAllAccounts(): List<PublicKeyCredentialSource> {
+        val storage = anyAuthenticator().db
+        return try {
+            withContext(databaseDispatcher) { storage.loadAll() }
+        } catch (e: Exception) {
+            throw WebAuthnException.CredSrcStorageException("Failed to load credentials", e)
         }
-
-        return result
     }
 
     /**
-     * Deletes all registered accounts.
+     * Deletes all registered accounts, including their hardware-backed key material.
      *
-     * @throws WebAuthnException.CredSrcStorageException If there is an error loading or deleting credentials from the database.
+     * This is irreversible: the private keys cannot be recovered, and a credential that is still
+     * registered at the relying party has to be deregistered there separately. Do not call this while a
+     * [create] or [get] ceremony is in flight; the account APIs deliberately stay outside the mutex those
+     * two hold, so a concurrent call can destroy the key the ceremony is using.
+     *
+     * Deletion is best effort: every credential is attempted even when an earlier one fails, and the first
+     * failure is rethrown with any later ones attached to it as suppressed exceptions.
+     *
+     * A credential whose key could not be deleted keeps its database row, since that row is the only record
+     * of the KeyStore alias, so it stays listed by [getAllAccounts] and fails here again on every later
+     * call. See [deleteAccount] for how to abandon such a key.
+     *
+     * @throws WebAuthnException.CredSrcStorageException If the credentials could not be loaded, or a row
+     * could not be deleted.
+     * @throws WebAuthnException.SecureExecutionException If key material could not be deleted.
      */
     suspend fun deleteAllAccounts() {
-        for (authMethod in AuthenticationMethod.entries) {
-            for (fmt in AttestationStatementFormat.entries) {
-                val authenticator = authenticatorProvider.getAuthenticator(
-                    authenticationMethod = authMethod,
-                    attestationStatement = fmt,
-                    fido2PromptInfo = null,
-                )
-
-                try {
-                    withContext(databaseDispatcher) {
-                        authenticator.db.loadAll().forEach { credential ->
-                            authenticator.db.delete(credential.id)
-                        }
-                    }
-                } catch (e: Exception) {
-                    throw WebAuthnException.CredSrcStorageException("Failed to load and delete all credentials", e)
-                }
+        val authenticator = anyAuthenticator()
+        val failures = mutableListOf<Throwable>()
+        for (credential in getAllAccounts()) {
+            try {
+                // Called directly: `cleanup` dispatches its own work and runs both deletions to
+                // completion, so wrapping it would only put a cancellation checkpoint in front of the
+                // keystore delete.
+                authenticator.cleanup(credential.id)
+            } catch (e: CancellationException) {
+                // Collecting this would keep the loop running over every remaining credential doing
+                // nothing, and attach the cancellations to an unrelated failure as suppressed exceptions.
+                throw e
+            } catch (e: Throwable) {
+                failures.add(e)
             }
         }
+        failures.firstOrNull()?.let { firstFailure ->
+            // addSuppressed throws IllegalArgumentException on self-suppression, and one exception instance
+            // can come back for several credentials (a cached or stubbed throwable from the storage layer).
+            failures.drop(1).forEach { if (it !== firstFailure) firstFailure.addSuppressed(it) }
+            throw firstFailure
+        }
     }
+
+    /**
+     * Deletes one registered account: its hardware-backed key material, and then its database row.
+     *
+     * The key deletion is idempotent: AndroidKeyStore reports a missing alias as success. Whether an
+     * unknown [credId] is an error overall therefore depends on your
+     * [com.linecorp.webauthn.db.CredentialSourceStorage], which this SDK does not require to tolerate one
+     * - an implementation that throws for an id it does not hold makes a repeated call fail with
+     * [WebAuthnException.CredSrcStorageException].
+     *
+     * @param credId The credential id as returned by [getAllAccounts], which is also the KeyStore alias of
+     * the credential's private key.
+     * @throws WebAuthnException.SecureExecutionException If the key material could not be deleted. The
+     * database row is kept in that case, since it is the only record of the KeyStore alias, so every later
+     * call for this [credId] fails the same way until the key deletion succeeds. To abandon the key instead,
+     * delete the row through your own [com.linecorp.webauthn.db.CredentialSourceStorage].
+     * @throws WebAuthnException.CredSrcStorageException If the database row could not be deleted.
+     */
+    suspend fun deleteAccount(credId: String) {
+        anyAuthenticator().cleanup(credId)
+    }
+
+    /**
+     * An [Authenticator] used only to reach shared state, with no prompt attached.
+     *
+     * The credential storage is one consumer-supplied instance shared by every authenticator type, so any
+     * authenticator reaches every stored credential, and one instance is enough for the account APIs above.
+     *
+     * `loadAll()` stays unfiltered: passing `authType.aaguid` would hide rows whose aaguid is not one of the
+     * [com.linecorp.webauthn.model.AuthenticatorType] values.
+     */
+    private fun anyAuthenticator(): Authenticator = authenticatorProvider.getAuthenticator(
+        authenticationMethod = authenticationMethod,
+        attestationStatement = attestationStatement,
+        fido2PromptInfo = null,
+    )
 
     /**
      * Creates a new public key credential.
