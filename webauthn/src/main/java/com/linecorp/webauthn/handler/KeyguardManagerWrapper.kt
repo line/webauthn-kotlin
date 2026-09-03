@@ -16,13 +16,13 @@
 
 package com.linecorp.webauthn.handler
 
+import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.hardware.biometrics.BiometricPrompt
 import android.os.Bundle
 import android.util.Log
-import androidx.appcompat.app.AppCompatActivity
 import com.linecorp.webauthn.model.Fido2PromptInfo
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -46,59 +46,99 @@ class KeyguardManagerWrapper {
             throw KeyguardNotSecuredException("Keyguard not secured")
         }
 
-        val intent = keyguardManager.createConfirmDeviceCredentialIntent(
-            fido2PromptInfo?.title ?: "Device Credential Authentication",
-            fido2PromptInfo?.description ?: "Input your Fingerprint or device credential to ensure it's you!"
-        ) ?: throw DeviceCredentialIntentNotAvailableException("Device credential intent not available")
+        val title = fido2PromptInfo?.title ?: "Device Credential Authentication"
+        val description = fido2PromptInfo?.description
+            ?: "Input your Fingerprint or device credential to ensure it's you!"
 
-        Log.d("KeyguardManagerWrapper", "Starting AuthenticationActivity with intent")
+        keyguardManager.createConfirmDeviceCredentialIntent(title, description)
+            ?: throw DeviceCredentialIntentNotAvailableException("Device credential intent not available")
 
         return suspendCancellableCoroutine { continuation ->
-            AuthenticationActivity.start(context, intent) { result, errorCode ->
-                if (result) {
-                    Log.d("KeyguardManagerWrapper", "Authentication succeeded")
-                    continuation.resume(true)
-                } else {
-                    Log.d("KeyguardManagerWrapper", "Authentication failed")
-                    continuation.resumeWithException(
-                        KeyguardManagerAuthenticationFailedException(
-                            errorCode = errorCode,
-                            message = "Authentication failed with errorCode: $errorCode"
+            val callback: (Boolean, Int?) -> Unit = { result, errorCode ->
+                if (continuation.isActive) {
+                    if (result) {
+                        Log.d("KeyguardManagerWrapper", "Authentication succeeded")
+                        continuation.resume(true)
+                    } else {
+                        Log.d("KeyguardManagerWrapper", "Authentication failed")
+                        continuation.resumeWithException(
+                            KeyguardManagerAuthenticationFailedException(
+                                errorCode = errorCode,
+                                message = "Authentication failed with errorCode: $errorCode"
+                            )
                         )
-                    )
+                    }
                 }
             }
+            continuation.invokeOnCancellation { AuthenticationActivity.clearCallback(callback) }
+            if (!continuation.isActive) {
+                return@suspendCancellableCoroutine
+            }
+            Log.d("KeyguardManagerWrapper", "Starting AuthenticationActivity")
+            AuthenticationActivity.start(context, title, description, callback)
         }
     }
 
-    class AuthenticationActivity : AppCompatActivity() {
+    class AuthenticationActivity : Activity() {
 
         companion object {
             private const val REQUEST_CODE_CONFIRM_DEVICE_CREDENTIAL = 1
-            private var callback: ((Boolean, Int?) -> Unit)? = null
+            private const val EXTRA_TITLE = "fido2_auth_title"
+            private const val EXTRA_DESCRIPTION = "fido2_auth_description"
 
-            fun start(context: Context, intent: Intent, callback: (Boolean, Int?) -> Unit) {
-                this.callback = callback
+            private val callbackRef = java.util.concurrent.atomic.AtomicReference<((Boolean, Int?) -> Unit)?>(null)
+
+            @JvmSynthetic
+            internal fun start(
+                context: Context,
+                title: CharSequence,
+                description: CharSequence,
+                callback: (Boolean, Int?) -> Unit
+            ) {
+                callbackRef.set(callback)
                 val activityIntent = Intent(context, AuthenticationActivity::class.java).apply {
-                    putExtra("fido2_auth_intent", intent)
+                    putExtra(EXTRA_TITLE, title)
+                    putExtra(EXTRA_DESCRIPTION, description)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                Log.d("AuthenticationActivity", "Starting activity with intent")
-                context.startActivity(activityIntent)
+                try {
+                    Log.d("AuthenticationActivity", "Starting activity")
+                    context.startActivity(activityIntent)
+                } catch (e: Throwable) {
+                    clearCallback(callback)
+                    throw e
+                }
             }
+
+            @JvmSynthetic
+            internal fun clearCallback(callback: (Boolean, Int?) -> Unit) {
+                callbackRef.compareAndSet(callback, null)
+            }
+
+            private fun takeCallback(): ((Boolean, Int?) -> Unit)? = callbackRef.getAndSet(null)
         }
 
         override fun onCreate(savedInstanceState: Bundle?) {
             super.onCreate(savedInstanceState)
-            val intent = intent.getParcelableExtra<Intent>("fido2_auth_intent")
-            if (intent != null) {
-                Log.d("AuthenticationActivity", "Starting activity for result")
-                startActivityForResult(intent, REQUEST_CODE_CONFIRM_DEVICE_CREDENTIAL)
-            } else {
-                Log.d("AuthenticationActivity", "Intent is null, finishing activity")
-                callback?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
-                finish()
+            if (savedInstanceState != null) {
+                if (callbackRef.get() == null) {
+                    finish()
+                }
+                return
             }
+            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            val confirmIntent = keyguardManager.createConfirmDeviceCredentialIntent(
+                intent.getCharSequenceExtra(EXTRA_TITLE),
+                intent.getCharSequenceExtra(EXTRA_DESCRIPTION)
+            )
+            if (confirmIntent == null) {
+                Log.d("AuthenticationActivity", "Confirm intent is null, finishing activity")
+                takeCallback()?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
+                finish()
+                return
+            }
+            Log.d("AuthenticationActivity", "Starting activity for result")
+            startActivityForResult(confirmIntent, REQUEST_CODE_CONFIRM_DEVICE_CREDENTIAL)
         }
 
         override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -107,16 +147,16 @@ class KeyguardManagerWrapper {
                 Log.d("AuthenticationActivity", "Received result: $resultCode")
                 when (resultCode) {
                     RESULT_OK -> {
-                        callback?.invoke(true, null)
                         Log.d("AuthenticationActivity", "Authentication succeeded")
+                        takeCallback()?.invoke(true, null)
                     }
                     RESULT_CANCELED -> {
                         Log.d("AuthenticationActivity", "Authentication canceled")
-                        callback?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED)
+                        takeCallback()?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED)
                     }
                     else -> {
                         Log.d("AuthenticationActivity", "Authentication failed")
-                        callback?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
+                        takeCallback()?.invoke(false, BiometricPrompt.BIOMETRIC_ERROR_UNABLE_TO_PROCESS)
                     }
                 }
             }
