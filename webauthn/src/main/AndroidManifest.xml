@@ -5,7 +5,6 @@
         <activity
             android:name=".handler.KeyguardManagerWrapper$AuthenticationActivity"
             android:configChanges="orientation|screenSize"
-            android:exported="true">
-        </activity>
+            android:exported="false" />
     </application>
 </manifest>

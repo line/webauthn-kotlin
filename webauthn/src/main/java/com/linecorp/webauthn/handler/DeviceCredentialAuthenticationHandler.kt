@@ -136,11 +136,6 @@ internal class DeviceCredentialAuthenticationHandler(
                 message = "Keyguard not secured",
                 cause = e
             )
-        } catch (e: KeyguardManagerWrapper.DeviceCredentialIntentNotAvailableException) {
-            throw AuthenticationHandler.AuthenticationErrorException(
-                message = "Device credential intent not available",
-                cause = e
-            )
         } catch (e: KeyguardManagerWrapper.KeyguardManagerAuthenticationFailedException) {
             throw AuthenticationHandler.AuthenticationErrorException(
                 errorCode = e.errorCode,
