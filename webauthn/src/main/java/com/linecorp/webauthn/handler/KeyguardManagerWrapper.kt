@@ -24,14 +24,14 @@ import android.hardware.biometrics.BiometricPrompt
 import android.os.Bundle
 import android.util.Log
 import com.linecorp.webauthn.model.Fido2PromptInfo
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 
-class KeyguardManagerWrapper {
+internal class KeyguardManagerWrapper {
 
     class KeyguardNotSecuredException(message: String) : Exception(message)
-    class DeviceCredentialIntentNotAvailableException(message: String) : Exception(message)
     class KeyguardManagerAuthenticationFailedException(val errorCode: Int?, message: String) : Exception(message)
 
     fun isSupported(context: Context): Boolean {
@@ -39,19 +39,24 @@ class KeyguardManagerWrapper {
         return keyguardManager.isDeviceSecure
     }
 
+    /**
+     * Confirms the user with a device credential (PIN, pattern, or password) via the system
+     * keyguard. Handles one request at a time, which its callers guarantee: credential
+     * ceremonies are serialised on a process-wide lock.
+     *
+     * @throws KeyguardNotSecuredException If no device credential is enrolled.
+     * @throws KeyguardManagerAuthenticationFailedException If the user fails or cancels the confirmation.
+     */
     suspend fun authenticate(context: Context, fido2PromptInfo: Fido2PromptInfo?): Boolean {
         val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
 
-        if (!keyguardManager.isKeyguardSecure) {
+        if (!keyguardManager.isDeviceSecure) {
             throw KeyguardNotSecuredException("Keyguard not secured")
         }
 
         val title = fido2PromptInfo?.title ?: "Device Credential Authentication"
         val description = fido2PromptInfo?.description
             ?: "Input your Fingerprint or device credential to ensure it's you!"
-
-        keyguardManager.createConfirmDeviceCredentialIntent(title, description)
-            ?: throw DeviceCredentialIntentNotAvailableException("Device credential intent not available")
 
         return suspendCancellableCoroutine { continuation ->
             val callback: (Boolean, Int?) -> Unit = { result, errorCode ->
@@ -86,7 +91,7 @@ class KeyguardManagerWrapper {
             private const val EXTRA_TITLE = "fido2_auth_title"
             private const val EXTRA_DESCRIPTION = "fido2_auth_description"
 
-            private val callbackRef = java.util.concurrent.atomic.AtomicReference<((Boolean, Int?) -> Unit)?>(null)
+            private val callbackRef = AtomicReference<((Boolean, Int?) -> Unit)?>(null)
 
             @JvmSynthetic
             internal fun start(

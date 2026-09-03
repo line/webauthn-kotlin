@@ -17,13 +17,14 @@ Security.
 - The activity's confirmation result was routed through a static field that was never cleared, so a
   result could be delivered twice or hold a cancelled request's continuation for the process lifetime.
   The result is now consumed exactly once, and a cancelled request releases the field.
-  `KeyguardManagerWrapper.authenticate` handles one request at a time, which `create` and `get` already
-  guarantee by serialising on a shared lock; a caller invoking it directly has to do the same.
-- `KeyguardManagerWrapper.AuthenticationActivity.start` is `internal`. It was public and accepted a
-  ready-made `Intent`, which is how the behaviour above was reachable from outside the SDK. Call
-  `KeyguardManagerWrapper.authenticate(context, fido2PromptInfo)` instead. Recompiling against 1.1.4
-  gives a compile error at such a call site; replacing the artifact without recompiling gives a
-  `NoSuchMethodError`, because an `internal` function's JVM name is mangled.
+  `KeyguardManagerWrapper.authenticate` handles one request at a time, which `create` and `get`
+  guarantee by serialising on a shared lock.
+- `KeyguardManagerWrapper` is `internal`, matching the other authentication handlers. It was public,
+  and its nested `AuthenticationActivity.start` accepted a ready-made `Intent`, which is how the
+  behaviour above was reachable from outside the SDK. Device-credential authentication goes through
+  `PublicKeyCredential.create` and `get` with `AuthenticationMethod.DeviceCredential`; availability
+  can be read from `KeyguardManager.isDeviceSecure` or `BiometricManager.canAuthenticate`, which is
+  all `isSupported` did. Recompiling against 1.1.4 gives a compile error at a direct reference.
 
 ### Fixed
 - The device-credential activity extended `AppCompatActivity` while declaring no theme of its own, so
