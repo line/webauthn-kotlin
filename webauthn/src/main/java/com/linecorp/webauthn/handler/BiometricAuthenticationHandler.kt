@@ -17,6 +17,7 @@
 package com.linecorp.webauthn.handler
 
 import android.content.Context
+import android.os.Build
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
@@ -33,18 +34,34 @@ import kotlinx.coroutines.withContext
 internal class BiometricAuthenticationHandler(
     private val authHandlerDispatcher: CoroutineDispatcher = Dispatchers.Main,
 ) : AuthenticationHandler {
+    /**
+     * On API 28 and 29 a fingerprint enrolled with the platform also counts, because androidx.biometric
+     * answers fingerprint availability there through a class the application's androidx.core can reduce
+     * to a no-op. See [LegacyFingerprint].
+     */
     override fun isSupported(context: Context): Boolean {
         val biometricManager = BiometricManager.from(context)
-        return biometricManager.canAuthenticate(
+        val strongBiometricAvailable = biometricManager.canAuthenticate(
             BiometricManager.Authenticators.BIOMETRIC_STRONG
         ) == BiometricManager.BIOMETRIC_SUCCESS
+        return strongBiometricAvailable ||
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.R && LegacyFingerprint.isAvailable(context))
     }
 
     override suspend fun authenticate(
         activity: FragmentActivity,
         fido2PromptInfo: Fido2PromptInfo?,
         signatureProvider: (() -> Signature)?
-    ): Fido2UserAuthResult = authenticateUserWithBiometricPrompt(activity, fido2PromptInfo, signatureProvider)
+    ): Fido2UserAuthResult =
+        if (signatureProvider != null && LegacyFingerprint.requiresFingerprintForCrypto(activity)) {
+            withContext(authHandlerDispatcher) {
+                Fido2UserAuthResult(
+                    signature = LegacyFingerprint.authenticate(activity, fido2PromptInfo, signatureProvider())
+                )
+            }
+        } else {
+            authenticateUserWithBiometricPrompt(activity, fido2PromptInfo, signatureProvider)
+        }
 
     private suspend fun authenticateUserWithBiometricPrompt(
         activity: FragmentActivity,

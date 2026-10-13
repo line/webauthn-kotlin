@@ -1,5 +1,29 @@
 # Change Log
 
+## 1.1.5 (2026-10-13)
+
+A fix release for biometric authentication on Android 9 and 10, so it can be taken without the other
+changes queued for 1.2.0. Registration and authentication responses are unchanged, so credentials
+already registered keep working and no relying-party change is required. The androidx.biometric
+dependency stays at 1.1.0, and Android 11 and later take the same code path as in 1.1.4.
+
+### Fixed
+- Biometric registration and authentication threw `ConstraintException` on Android 9 and 10 with a
+  fingerprint enrolled, when the application resolves androidx.core 1.18.0 or later. That release made
+  `androidx.core.hardware.fingerprint.FingerprintManagerCompat` a no-op that reports no fingerprint
+  hardware, and on API 28 and 29 androidx.biometric 1.1.0 answers `canAuthenticate(BIOMETRIC_STRONG)`
+  through it, with `BIOMETRIC_STATUS_UNKNOWN`. On those API levels the SDK also accepts a fingerprint
+  enrolled with the platform `FingerprintManager`.
+- With the same androidx.core, crypto-based biometric prompts on Samsung devices running Android 9 failed
+  with `BiometricPrompt.ERROR_HW_NOT_PRESENT` before anything was shown, because androidx.biometric 1.1.0
+  runs them through `FingerprintManagerCompat` on those devices. This is every `get`, and a `create` with
+  `AttestationStatementFormat.ANDROID_KEY`. On the devices androidx.biometric selects for this, the SDK
+  authorises signing through the platform `FingerprintManager` with a dialog of its own. The dialog takes
+  its texts from `Fido2PromptInfo` and reports errors with the `BiometricPrompt.ERROR_*` codes, including
+  `ERROR_NEGATIVE_BUTTON` for its negative button, `ERROR_USER_CANCELED` for back, and `ERROR_CANCELED`
+  when the activity leaves the foreground. As in androidx.biometric, no dialog is drawn on the models
+  whose system overlay covers it, such as the Galaxy S10 and Note10 series.
+
 ## 1.1.4 (2026-09-03)
 
 A security release covering the device-credential activity, with two algorithm constants corrected
