@@ -1,11 +1,14 @@
 # Change Log
 
-## 1.1.5 (2026-10-13)
+## 1.1.5 (2026-10-16)
 
-A fix release for biometric authentication on Android 9 and 10, so it can be taken without the other
-changes queued for 1.2.0. Registration and authentication responses are unchanged, so credentials
-already registered keep working and no relying-party change is required. The androidx.biometric
-dependency stays at 1.1.0, and Android 11 and later take the same code path as in 1.1.4.
+A fix release for biometric authentication on Android 9 and 10 and for the encoding of the credential
+public key, with one dependency removed, so it can be taken without the other changes queued for 1.2.0.
+Authentication responses are unchanged, and credentials already registered keep working. A registration
+response differs only where a public key coordinate was encoded at a length other than 32 bytes, and a
+relying party that accepted those also accepts the fixed-length form, so no relying-party change is
+required. The androidx.biometric dependency stays at 1.1.0, and biometric authentication on Android 11
+and later takes the same code path as in 1.1.4.
 
 ### Fixed
 - Biometric registration and authentication threw `ConstraintException` on Android 9 and 10 with a
@@ -23,6 +26,17 @@ dependency stays at 1.1.0, and Android 11 and later take the same code path as i
   `ERROR_NEGATIVE_BUTTON` for its negative button, `ERROR_USER_CANCELED` for back, and `ERROR_CANCELED`
   when the activity leaves the foreground. As in androidx.biometric, no dialog is drawn on the models
   whose system overlay covers it, such as the Galaxy S10 and Note10 series.
+- The P-256 coordinates of the credential public key in a registration response were taken from
+  `BigInteger.toByteArray`, which gives 33 bytes when the top bit is set and fewer than 32 when the value
+  has leading zero bytes, so about three keys in four had a coordinate that was not 32 bytes. COSE fixes
+  them at 32 bytes, and relying parties that check this, such as Fido2NetLib, rejected the registration.
+  `EC2COSEKey` stores P-256 coordinates as 32-byte unsigned big-endian values, and throws
+  `WebAuthnException.EncodingException` for a coordinate with more significant bytes than that. (#15)
+
+### Changed
+- The SDK does not depend on androidx.room, which it does not use. Room and androidx.sqlite are no longer
+  on the runtime classpath of an application through this library, so an application that uses Room
+  without declaring it must add the dependency itself. (#11)
 
 ## 1.1.4 (2026-09-03)
 
