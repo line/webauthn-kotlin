@@ -60,7 +60,7 @@ First, you need to create an implementation of the `RelyingParty` interface. Thi
 
 To help you get started with your implementation, we recommend checking out a sample application available on GitHub:
 
-* [webauthndemo-kotlin/RelyingParty](https://github.com/line/webauthndemo-kotlin/blob/main/app/src/main/java/jp/co/lycorp/webauthn/sample/network/Fido2RelyingPartyImpl.kt)
+* [webauthndemo-kotlin/RelyingParty](https://github.com/line/webauthndemo-kotlin/blob/main/app/src/main/java/com/linecorp/webauthn/sample/network/Fido2RelyingPartyImpl.kt)
 
 This sample provides a practical example of how to implement the `RelyingParty` interface in a real-world Android application. It will give you insights into integrating FIDO2 functionalities effectively with your server setup.
 
@@ -70,7 +70,7 @@ Next, you need to create an implementation of the `CredentialSourceStorage ` int
 
 To help you get started with your implementation, we recommend checking out a sample application available on GitHub:
 
-* [webauthndemo-kotlin/CredentialSourceStorage](https://github.com/line/webauthndemo-kotlin/blob/main/app/src/main/java/jp/co/lycorp/webauthn/sample/data/database/RoomCredentialSourceStorage.kt)
+* [webauthndemo-kotlin/CredentialSourceStorage](https://github.com/line/webauthndemo-kotlin/blob/main/app/src/main/java/com/linecorp/webauthn/sample/data/database/RoomCredentialSourceStorage.kt)
 
 ### Step 3: Initialize `PublicKeyCredential`
 Once you have your relying party and credential storage implementation ready, you can initialize the public key credential.
