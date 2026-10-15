@@ -15,7 +15,6 @@
  */
 
 buildscript {
-    ext.kotlin_version = "$project.kotlinVersion"
     repositories {
         google()
         mavenCentral()
@@ -33,7 +32,7 @@ plugins {
 
 group = "com.linecorp"
 
-// Root 프로젝트는 배포하지 않음
+// The root project is not published
 afterEvaluate {
     tasks.withType(PublishToMavenRepository).configureEach { enabled = false }
 }

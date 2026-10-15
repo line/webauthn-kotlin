@@ -15,7 +15,6 @@
  */
 
 import org.codehaus.groovy.runtime.GStringImpl
-import org.jetbrains.kotlin.gradle.tasks.KaptGenerateStubs
 
 buildscript {
     project.ext.isSnapshot = project.snapshotBuild.toBoolean()
@@ -33,22 +32,19 @@ plugins {
     id "maven-publish"
     id "signing"
     id "com.android.library"
-    id "kotlin-android"
-    id "org.jetbrains.kotlin.plugin.serialization" version "$kotlinVersion"
     id "org.jetbrains.kotlin.android"
+    id "org.jetbrains.kotlin.plugin.serialization" version "$kotlinVersion"
     id "de.mannodermaus.android-junit5"
     id "org.jlleitschuh.gradle.ktlint" version "13.1.0"
 }
 
 android {
-    namespace "com.linecorp.webauthn"
+    namespace = "com.linecorp.webauthn"
     compileSdkVersion 35
 
     defaultConfig {
         minSdkVersion 28
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         testInstrumentationRunnerArgument("runnerBuilder", "de.mannodermaus.junit5.AndroidJUnit5Builder")
@@ -92,8 +88,6 @@ android {
         }
     }
 }
-
-tasks.withType(KaptGenerateStubs).configureEach{kotlinOptions{jvmTarget = "11"}}
 
 dependencies {
     implementation "androidx.core:core-ktx:$project.coreVersion"
