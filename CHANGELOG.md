@@ -34,9 +34,9 @@ and later takes the same code path as in 1.1.4.
   `WebAuthnException.EncodingException` for a coordinate with more significant bytes than that. (#15)
 
 ### Changed
-- The SDK does not depend on androidx.room, which it does not use. Room and androidx.sqlite are no longer
-  on the runtime classpath of an application through this library, so an application that uses Room
-  without declaring it must add the dependency itself. (#11)
+- The SDK does not depend on androidx.room, which it does not use, so Room and androidx.sqlite no longer
+  reach the runtime classpath of an application through this library. An application that declares an
+  earlier Room version than 2.6.1 now resolves the version it declares. (#11)
 
 ## 1.1.4 (2026-09-03)
 
