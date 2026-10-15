@@ -97,6 +97,13 @@ class AttestedCredData(val aaguid: ByteArray, val credId: ByteArray, val publicK
 }
 
 class EC2COSEKey(var kty: Int, var alg: Int, var crv: Int, var x: ByteArray, var y: ByteArray,) : CborSerializable {
+    init {
+        if (crv == P_256_CURVE_ID) {
+            x = normalizeCoordinate(x, P_256_COORDINATE_SIZE)
+            y = normalizeCoordinate(y, P_256_COORDINATE_SIZE)
+        }
+    }
+
     constructor(ecPublicKey: ECPublicKey) : this(
         kty = 2,
         alg = -7,
@@ -112,6 +119,34 @@ class EC2COSEKey(var kty: Int, var alg: Int, var crv: Int, var x: ByteArray, var
         .put(-2, x)
         .put(-3, y)
         .end()
+
+    companion object {
+        private const val P_256_CURVE_ID = 1
+        private const val P_256_COORDINATE_SIZE = 32
+
+        private fun normalizeCoordinate(input: ByteArray, expectedLength: Int): ByteArray {
+            var normalized = input
+            while (normalized.size > expectedLength && normalized.first() == 0.toByte()) {
+                normalized = normalized.copyOfRange(1, normalized.size)
+            }
+            if (normalized.size > expectedLength) {
+                throw WebAuthnException.EncodingException(
+                    "EC coordinate length ${normalized.size} exceeds expected size $expectedLength",
+                )
+            }
+            if (normalized.size == expectedLength) return normalized
+
+            return ByteArray(expectedLength).apply {
+                System.arraycopy(
+                    normalized,
+                    0,
+                    this,
+                    expectedLength - normalized.size,
+                    normalized.size,
+                )
+            }
+        }
+    }
 }
 
 enum class AuthenticatorDataFlags(val value: UByte) {
