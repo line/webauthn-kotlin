@@ -3,12 +3,11 @@
 ## 1.1.5 (2026-10-16)
 
 A fix release for biometric authentication on Android 9 and 10 and for the encoding of the credential
-public key, with one dependency removed, so it can be taken without the other changes queued for 1.2.0.
-Authentication responses are unchanged, and credentials already registered keep working. A registration
-response differs only where a public key coordinate was encoded at a length other than 32 bytes, and a
-relying party that accepted those also accepts the fixed-length form, so no relying-party change is
-required. The androidx.biometric dependency stays at 1.1.0, and biometric authentication on Android 11
-and later takes the same code path as in 1.1.4.
+public key, with one dependency removed. Authentication responses are unchanged, and credentials already
+registered keep working. A registration response differs only where a public key coordinate was encoded
+at a length other than 32 bytes, and a relying party that accepted those also accepts the fixed-length
+form, so no relying-party change is required. The androidx.biometric dependency stays at 1.1.0, and
+biometric authentication on Android 11 and later takes the same code path as in 1.1.4.
 
 ### Fixed
 - Biometric registration and authentication threw `ConstraintException` on Android 9 and 10 with a
@@ -41,10 +40,9 @@ and later takes the same code path as in 1.1.4.
 ## 1.1.4 (2026-09-03)
 
 A security release covering the device-credential activity, with two algorithm constants corrected
-alongside it, so it can be taken without the other changes queued for 1.2.0. Registration and
-authentication responses are unchanged, so credentials already registered keep working and no
-relying-party change is required. One change requires action from applications; see the last entry under
-Security.
+alongside it. Registration and authentication responses are unchanged, so credentials already registered
+keep working and no relying-party change is required. One change requires action from applications; see
+the last entry under Security.
 
 ### Security
 - The device-credential activity is no longer exported, and it builds its confirm-device-credential
