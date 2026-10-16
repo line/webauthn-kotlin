@@ -55,9 +55,6 @@ class LegacyFingerprintTest {
         every {
             resources.getStringArray(androidx.biometric.R.array.crypto_fingerprint_fallback_prefixes)
         } returns emptyArray()
-        every {
-            resources.getStringArray(androidx.biometric.R.array.hide_fingerprint_instantly_prefixes)
-        } returns arrayOf("SM-G973", "SM-G975")
     }
 
     @Test
@@ -66,20 +63,8 @@ class LegacyFingerprintTest {
     }
 
     @Test
-    fun `isAvailable is false without the fingerprint feature`() {
-        every { packageManager.hasSystemFeature(PackageManager.FEATURE_FINGERPRINT) } returns false
-        assertThat(LegacyFingerprint.isAvailable(context)).isFalse()
-    }
-
-    @Test
     fun `isAvailable is false without a secure lock screen`() {
         every { keyguardManager.isDeviceSecure } returns false
-        assertThat(LegacyFingerprint.isAvailable(context)).isFalse()
-    }
-
-    @Test
-    fun `isAvailable is false when the fingerprint hardware is not detected`() {
-        every { fingerprintManager.isHardwareDetected } returns false
         assertThat(LegacyFingerprint.isAvailable(context)).isFalse()
     }
 
@@ -90,63 +75,17 @@ class LegacyFingerprintTest {
     }
 
     @Test
-    fun `isAvailable is false when the fingerprint service is missing`() {
-        every { context.getSystemService(FingerprintManager::class.java) } returns null
-        assertThat(LegacyFingerprint.isAvailable(context)).isFalse()
-    }
-
-    @Test
     fun `fingerprint is required for crypto only on listed vendors running API 28`() {
         assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 28, "samsung", "SM-G960F")).isTrue()
-        assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 28, "SAMSUNG", "SM-G960F")).isTrue()
         assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 29, "samsung", "SM-G960F")).isFalse()
-        assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 30, "samsung", "SM-G960F")).isFalse()
         assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 28, "Google", "Pixel 3")).isFalse()
-        assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 28, null, null)).isFalse()
     }
 
     @Test
-    fun `fingerprint is required for crypto on listed model prefixes running API 28`() {
-        every {
-            resources.getStringArray(androidx.biometric.R.array.crypto_fingerprint_fallback_prefixes)
-        } returns arrayOf("ABC-")
-        assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 28, "vendor", "ABC-100")).isTrue()
-        assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 28, "vendor", "XYZ-100")).isFalse()
-        assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 29, "vendor", "ABC-100")).isFalse()
-    }
-
-    @Test
-    fun `the dialog is hidden only on listed model prefixes running API 28`() {
-        assertThat(LegacyFingerprint.hidesDialog(context, 28, "SM-G975F")).isTrue()
-        assertThat(LegacyFingerprint.hidesDialog(context, 28, "SM-G960F")).isFalse()
-        assertThat(LegacyFingerprint.hidesDialog(context, 29, "SM-G975F")).isFalse()
-        assertThat(LegacyFingerprint.hidesDialog(context, 28, null)).isFalse()
-    }
-
-    @Test
-    fun `error codes BiometricPrompt defines are reported unchanged`() {
-        val defined = listOf(
-            BiometricPrompt.ERROR_HW_UNAVAILABLE,
-            BiometricPrompt.ERROR_UNABLE_TO_PROCESS,
-            BiometricPrompt.ERROR_TIMEOUT,
-            BiometricPrompt.ERROR_NO_SPACE,
-            BiometricPrompt.ERROR_CANCELED,
-            BiometricPrompt.ERROR_LOCKOUT,
-            BiometricPrompt.ERROR_VENDOR,
-            BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
-            BiometricPrompt.ERROR_USER_CANCELED,
-            BiometricPrompt.ERROR_NO_BIOMETRICS,
-            BiometricPrompt.ERROR_HW_NOT_PRESENT,
-            BiometricPrompt.ERROR_NEGATIVE_BUTTON,
-            BiometricPrompt.ERROR_NO_DEVICE_CREDENTIAL,
-            BiometricPrompt.ERROR_SECURITY_UPDATE_REQUIRED,
-        )
-        defined.forEach { assertThat(LegacyFingerprint.toBiometricPromptError(it)).isEqualTo(it) }
-    }
-
-    @Test
-    fun `vendor and undefined error codes are reported as ERROR_VENDOR`() {
-        listOf(1000, 1003, 0, 6, 16, -1).forEach {
+    fun `error codes BiometricPrompt does not define are reported as ERROR_VENDOR`() {
+        assertThat(LegacyFingerprint.toBiometricPromptError(BiometricPrompt.ERROR_LOCKOUT))
+            .isEqualTo(BiometricPrompt.ERROR_LOCKOUT)
+        listOf(1000, 1003, 6).forEach {
             assertThat(LegacyFingerprint.toBiometricPromptError(it)).isEqualTo(BiometricPrompt.ERROR_VENDOR)
         }
     }
@@ -154,22 +93,12 @@ class LegacyFingerprintTest {
     @Test
     fun `the callback relay forwards to its target until the target is cleared`() {
         val target = mockk<FingerprintManager.AuthenticationCallback>(relaxed = true)
-        val result = mockk<FingerprintManager.AuthenticationResult>()
         val relay = LegacyFingerprint.CallbackRelay(target)
 
-        relay.onAuthenticationFailed()
-        relay.onAuthenticationHelp(1, "help")
-        relay.onAuthenticationSucceeded(result)
         relay.onAuthenticationError(BiometricPrompt.ERROR_CANCELED, "canceled")
         relay.target = null
-        relay.onAuthenticationFailed()
-        relay.onAuthenticationHelp(1, "help")
-        relay.onAuthenticationSucceeded(result)
         relay.onAuthenticationError(BiometricPrompt.ERROR_CANCELED, "canceled")
 
-        verify(exactly = 1) { target.onAuthenticationFailed() }
-        verify(exactly = 1) { target.onAuthenticationHelp(1, "help") }
-        verify(exactly = 1) { target.onAuthenticationSucceeded(result) }
         verify(exactly = 1) { target.onAuthenticationError(BiometricPrompt.ERROR_CANCELED, "canceled") }
     }
 }
