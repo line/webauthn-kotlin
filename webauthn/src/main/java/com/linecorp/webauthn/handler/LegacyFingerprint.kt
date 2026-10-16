@@ -112,6 +112,31 @@ internal object LegacyFingerprint {
     }
 
     /**
+     * The [BiometricPrompt] code for a [FingerprintManager] error code. The platform reports the errors
+     * that [BiometricPrompt] defines with the same values, and a vendor error as 1000 plus the vendor's
+     * code. Any code [BiometricPrompt] does not define becomes `ERROR_VENDOR`, as in androidx.biometric.
+     */
+    fun toBiometricPromptError(errorCode: Int): Int =
+        if (errorCode in biometricPromptErrors) errorCode else BiometricPrompt.ERROR_VENDOR
+
+    private val biometricPromptErrors = setOf(
+        BiometricPrompt.ERROR_HW_UNAVAILABLE,
+        BiometricPrompt.ERROR_UNABLE_TO_PROCESS,
+        BiometricPrompt.ERROR_TIMEOUT,
+        BiometricPrompt.ERROR_NO_SPACE,
+        BiometricPrompt.ERROR_CANCELED,
+        BiometricPrompt.ERROR_LOCKOUT,
+        BiometricPrompt.ERROR_VENDOR,
+        BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
+        BiometricPrompt.ERROR_USER_CANCELED,
+        BiometricPrompt.ERROR_NO_BIOMETRICS,
+        BiometricPrompt.ERROR_HW_NOT_PRESENT,
+        BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+        BiometricPrompt.ERROR_NO_DEVICE_CREDENTIAL,
+        BiometricPrompt.ERROR_SECURITY_UPDATE_REQUIRED,
+    )
+
+    /**
      * Authenticates with the platform [FingerprintManager] and returns the unlocked [signature].
      * The dialog shows the texts and defaults of the `BiometricPrompt` path. Errors are reported with
      * the same codes as [BiometricPrompt], so callers that branch on `BiometricPrompt.ERROR_*` keep
@@ -129,9 +154,11 @@ internal object LegacyFingerprint {
         val cancellationSignal = CancellationSignal()
         var dialog: AlertDialog? = null
         var lifecycleObserver: DefaultLifecycleObserver? = null
+        var callbackRelay: CallbackRelay? = null
 
         fun finish(block: () -> Unit) {
             if (!continuation.isActive) return
+            callbackRelay?.target = null
             lifecycleObserver?.let { activity.lifecycle.removeObserver(it) }
             dialog?.setOnCancelListener(null)
             dialog?.dismiss()
@@ -151,7 +178,9 @@ internal object LegacyFingerprint {
             }
         }
 
-        val fingerprintManager = activity.getSystemService(FingerprintManager::class.java)
+        // The fingerprint service can hold this manager after the request ends, and the application
+        // context's instance keeps the activity out of that reference. See CallbackRelay.
+        val fingerprintManager = activity.applicationContext.getSystemService(FingerprintManager::class.java)
         if (fingerprintManager == null) {
             fail(BiometricPrompt.ERROR_HW_NOT_PRESENT, "Fingerprint hardware is not available.")
             return@suspendCancellableCoroutine
@@ -196,6 +225,7 @@ internal object LegacyFingerprint {
 
         continuation.invokeOnCancellation {
             mainHandler.post {
+                callbackRelay?.target = null
                 if (!cancellationSignal.isCanceled) cancellationSignal.cancel()
                 lifecycleObserver?.let { activity.lifecycle.removeObserver(it) }
                 dialog?.setOnCancelListener(null)
@@ -225,10 +255,10 @@ internal object LegacyFingerprint {
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
-                // FingerprintManager error codes share their values with BiometricPrompt.ERROR_*.
-                fail(errorCode, errString)
+                fail(toBiometricPromptError(errorCode), errString)
             }
         }
+        val relay = CallbackRelay(callback).also { callbackRelay = it }
 
         // Nothing may escape this block: the caller would receive the exception while the dialog, the
         // observer and the continuation stay live, and a later fail() would resume it a second time.
@@ -238,11 +268,37 @@ internal object LegacyFingerprint {
                 FingerprintManager.CryptoObject(signature),
                 cancellationSignal,
                 0,
-                callback,
+                relay,
                 mainHandler,
             )
         } catch (e: RuntimeException) {
             fail(BiometricPrompt.ERROR_HW_UNAVAILABLE, e.message, e)
+        }
+    }
+
+    /**
+     * Forwards platform callbacks to [target] while it is set. A [FingerprintManager] keeps the last
+     * callback it was given until its next `authenticate` call, and the application context's instance
+     * lives as long as the process, so the callback it holds must not keep the request's activity
+     * reachable once the request has ended. [authenticate] clears [target] when it finishes or is
+     * cancelled.
+     */
+    internal class CallbackRelay(var target: FingerprintManager.AuthenticationCallback?) :
+        FingerprintManager.AuthenticationCallback() {
+        override fun onAuthenticationSucceeded(result: FingerprintManager.AuthenticationResult) {
+            target?.onAuthenticationSucceeded(result)
+        }
+
+        override fun onAuthenticationFailed() {
+            target?.onAuthenticationFailed()
+        }
+
+        override fun onAuthenticationHelp(helpCode: Int, helpString: CharSequence?) {
+            target?.onAuthenticationHelp(helpCode, helpString)
+        }
+
+        override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+            target?.onAuthenticationError(errorCode, errString)
         }
     }
 }
