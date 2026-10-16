@@ -232,8 +232,9 @@ class PublicKeyCredential(
     }
 
     /**
-     * Deletes all registered accounts.
+     * Deletes all registered accounts, together with their keys in AndroidKeyStore.
      *
+     * @throws WebAuthnException.SecureExecutionException If a key cannot be deleted from AndroidKeyStore.
      * @throws WebAuthnException.CredSrcStorageException If there is an error loading or deleting credentials from the database.
      */
     suspend fun deleteAllAccounts() {
@@ -245,15 +246,14 @@ class PublicKeyCredential(
                     fido2PromptInfo = null,
                 )
 
-                try {
+                val credentials = try {
                     withContext(databaseDispatcher) {
-                        authenticator.db.loadAll().forEach { credential ->
-                            authenticator.db.delete(credential.id)
-                        }
+                        authenticator.db.loadAll()
                     }
                 } catch (e: Exception) {
-                    throw WebAuthnException.CredSrcStorageException("Failed to load and delete all credentials", e)
+                    throw WebAuthnException.CredSrcStorageException("Failed to load all credentials", e)
                 }
+                credentials.forEach { credential -> authenticator.cleanup(credential.id) }
             }
         }
     }

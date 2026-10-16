@@ -50,6 +50,7 @@ import com.linecorp.webauthn.util.Fido2Util
 import com.linecorp.webauthn.util.MockCredentialSourceStorage
 import com.linecorp.webauthn.util.toBase64url
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
@@ -254,6 +255,18 @@ class PublicKeyCredentialTest {
             assertThat(authResult.isFailure).isTrue()
             assertThat(authResult.exceptionOrNull()).isInstanceOf(exceptionType.java)
         }
+    }
+
+    @Test
+    fun `deleteAllAccounts cleans up every stored credential`(): Unit = runBlocking {
+        every { mockAuthenticator.db } returns mockDb
+        coEvery { mockAuthenticator.cleanup(any()) } coAnswers { mockDb.delete(firstArg()) }
+        mockDb.store(registeredCredSource)
+
+        publicKeyCredential.deleteAllAccounts()
+
+        coVerify(exactly = 1) { mockAuthenticator.cleanup(registeredCredId) }
+        assertThat(mockDb.loadAll()).isEmpty()
     }
 
     private fun generateString(pattern: String, length: Int): String =
