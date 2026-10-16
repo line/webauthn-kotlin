@@ -45,7 +45,9 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.slot
 import io.mockk.unmockkObject
+import io.mockk.verify
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.Signature
@@ -396,6 +398,33 @@ class AuthenticatorTest {
             )
         }
 
+        coEvery {
+            mockAuthenticationHandler.authenticate(any(), any(), any())
+        } returns Fido2UserAuthResult(mockSignature)
+    }
+
+    @Test
+    fun `a failed registration deletes the key under the alias it was generated with`() {
+        val keyAlias = slot<String>()
+        every { mockKeyGenerator.generateFido2Key(capture(keyAlias), any(), any(), any()) } returns dummyKeyPair
+        coEvery {
+            mockAuthenticationHandler.authenticate(any(), any(), any())
+        } throws AuthenticationHandler.AuthenticationErrorException()
+
+        shouldThrowException(WebAuthnException.CoreException.NotAllowedException::class) {
+            authenticator.makeCredential(
+                mockActivity,
+                dummyByteArray,
+                dummyRpEntity,
+                dummyUserEntity,
+                listOf(es256CredParams),
+                listOf(registeredCredDescriptor),
+                null
+            )
+        }
+        verify { SecureExecutionHelper.deleteKey(keyAlias.captured) }
+
+        every { mockKeyGenerator.generateFido2Key(any(), any(), any(), any()) } returns dummyKeyPair
         coEvery {
             mockAuthenticationHandler.authenticate(any(), any(), any())
         } returns Fido2UserAuthResult(mockSignature)

@@ -15,7 +15,6 @@
  */
 
 import org.codehaus.groovy.runtime.GStringImpl
-import org.jetbrains.kotlin.gradle.tasks.KaptGenerateStubs
 
 buildscript {
     project.ext.isSnapshot = project.snapshotBuild.toBoolean()
@@ -33,23 +32,19 @@ plugins {
     id "maven-publish"
     id "signing"
     id "com.android.library"
-    id "kotlin-android"
-    id "org.jetbrains.kotlin.plugin.serialization" version "$kotlinVersion"
-    id "com.google.devtools.ksp" version "2.2.10-2.0.2"
     id "org.jetbrains.kotlin.android"
+    alias(libs.plugins.kotlin.serialization)
     id "de.mannodermaus.android-junit5"
-    id "org.jlleitschuh.gradle.ktlint" version "13.1.0"
+    alias(libs.plugins.ktlint)
 }
 
 android {
-    namespace "com.linecorp.webauthn"
+    namespace = "com.linecorp.webauthn"
     compileSdkVersion 35
 
     defaultConfig {
         minSdkVersion 28
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         testInstrumentationRunnerArgument("runnerBuilder", "de.mannodermaus.junit5.AndroidJUnit5Builder")
@@ -94,52 +89,50 @@ android {
     }
 }
 
-tasks.withType(KaptGenerateStubs).configureEach{kotlinOptions{jvmTarget = "11"}}
-
 dependencies {
-    implementation "androidx.core:core-ktx:$project.coreVersion"
-    implementation "androidx.appcompat:appcompat:$project.appcompatVersion"
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$project.kotlinxCoroutinesVersion"
+    implementation libs.androidx.core.ktx
+    implementation libs.androidx.appcompat
+    implementation libs.kotlinx.coroutines.core
 
     // library for test
-    androidTestImplementation "org.jetbrains.kotlin:kotlin-test-junit:$project.kotlinTestJunitVersion"
-    androidTestImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:$project.kotlinxCoroutinesVersion"
-    androidTestImplementation "androidx.test.espresso:espresso-core:$project.espressoVersion"
-    androidTestImplementation "io.mockk:mockk-android:$project.mockkVersion"
-    androidTestImplementation "androidx.fragment:fragment-testing:$project.fragmentTestingVersion"
-    testImplementation "io.mockk:mockk-android:$project.mockkVersion"
-    testImplementation "org.jetbrains.kotlin:kotlin-test-junit:$project.kotlinTestJunitVersion"
-    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:$project.kotlinxCoroutinesVersion"
+    androidTestImplementation libs.kotlin.test.junit
+    androidTestImplementation libs.kotlinx.coroutines.test
+    androidTestImplementation libs.androidx.test.espresso.core
+    androidTestImplementation libs.mockk.android
+    androidTestImplementation libs.androidx.fragment.testing
+    testImplementation libs.mockk.android
+    testImplementation libs.kotlin.test.junit
+    testImplementation libs.kotlinx.coroutines.test
 
     // junit5
-    testImplementation platform("org.junit:junit-bom:$project.junit5Version")
-    testImplementation "org.junit.jupiter:junit-jupiter-api"
-    testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine"
-    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
-    testImplementation "org.junit.jupiter:junit-jupiter-params:$project.junit5Version"
+    testImplementation platform(libs.junit.bom)
+    testImplementation libs.junit.jupiter.api
+    testRuntimeOnly libs.junit.jupiter.engine
+    testRuntimeOnly libs.junit.platform.launcher
+    testImplementation libs.junit.jupiter.params
 
-    androidTestImplementation platform("org.junit:junit-bom:$project.junit5Version")
-    androidTestImplementation "org.junit.jupiter:junit-jupiter-api"
-    androidTestRuntimeOnly "org.junit.jupiter:junit-jupiter-engine"
-    androidTestImplementation "org.junit.jupiter:junit-jupiter-params:$project.junit5Version"
+    androidTestImplementation platform(libs.junit.bom)
+    androidTestImplementation libs.junit.jupiter.api
+    androidTestRuntimeOnly libs.junit.jupiter.engine
+    androidTestImplementation libs.junit.jupiter.params
 
     // truth
-    androidTestImplementation("com.google.truth:truth:$project.truthVersion")
-    testImplementation("com.google.truth:truth:$project.truthVersion")
+    androidTestImplementation libs.truth
+    testImplementation libs.truth
 
     // cbor
-    implementation group: "co.nstant.in", name: "cbor", version: "0.9"
+    implementation libs.cbor
 
     // coroutine
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$project.kotlinxCoroutinesVersion"
+    implementation libs.kotlinx.coroutines.android
 
     // androidx biometric
-    implementation "androidx.biometric:biometric:$project.biometricVersion"
+    implementation libs.androidx.biometric
 
     // serialization
-    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:$project.kotlinxSerializationVersion"
+    implementation libs.kotlinx.serialization.json
 
-    implementation "org.jetbrains.kotlin:kotlin-reflect:$project.kotlinVersion"
+    implementation libs.kotlin.reflect
 }
 
 android.libraryVariants.configureEach { variant ->

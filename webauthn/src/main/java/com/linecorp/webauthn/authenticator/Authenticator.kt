@@ -435,14 +435,15 @@ internal class Authenticator(
     }
 
     /**
-     * Cleans up by deleting a unnecessary credential.
+     * Cleans up by deleting a unnecessary credential: its key in AndroidKeyStore, whose alias is the
+     * credential ID, and its row in the database.
      *
      * @param credId The credential ID.
+     * @throws WebAuthnException.SecureExecutionException If the key cannot be deleted from AndroidKeyStore.
      * @throws WebAuthnException.CredSrcStorageException If there is an error deleting the credential from the database.
      */
     suspend fun cleanup(credId: String) {
-        val keyAlias = credId.toBase64url()
-        SecureExecutionHelper.deleteKey(keyAlias)
+        SecureExecutionHelper.deleteKey(credId)
         try {
             withContext(databaseDispatcher) {
                 db.delete(credId = credId)
