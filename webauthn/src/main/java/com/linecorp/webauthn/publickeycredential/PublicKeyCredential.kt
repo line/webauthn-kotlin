@@ -238,23 +238,16 @@ class PublicKeyCredential(
      * @throws WebAuthnException.CredSrcStorageException If there is an error loading or deleting credentials from the database.
      */
     suspend fun deleteAllAccounts() {
-        for (authMethod in AuthenticationMethod.entries) {
-            for (fmt in AttestationStatementFormat.entries) {
-                val authenticator = authenticatorProvider.getAuthenticator(
-                    authenticationMethod = authMethod,
-                    attestationStatement = fmt,
-                    fido2PromptInfo = null,
-                )
-
-                val credentials = try {
-                    withContext(databaseDispatcher) {
-                        authenticator.db.loadAll()
-                    }
-                } catch (e: Exception) {
-                    throw WebAuthnException.CredSrcStorageException("Failed to load all credentials", e)
-                }
-                credentials.forEach { credential -> authenticator.cleanup(credential.id) }
+        val authenticator = authenticatorProvider.getAuthenticator(authenticationMethod, attestationStatement)
+        val credentials = try {
+            withContext(databaseDispatcher) {
+                authenticator.db.loadAll()
             }
+        } catch (e: Exception) {
+            throw WebAuthnException.CredSrcStorageException("Failed to load all credentials", e)
+        }
+        withContext(databaseDispatcher) {
+            credentials.forEach { credential -> authenticator.cleanup(credential.id) }
         }
     }
 
