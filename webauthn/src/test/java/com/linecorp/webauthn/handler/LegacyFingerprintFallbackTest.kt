@@ -31,7 +31,7 @@ import io.mockk.verify
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-class LegacyFingerprintTest {
+class LegacyFingerprintFallbackTest {
 
     private val context = mockk<Context>()
     private val packageManager = mockk<PackageManager>()
@@ -59,41 +59,41 @@ class LegacyFingerprintTest {
 
     @Test
     fun `isAvailable is true with a secure lock screen and an enrolled fingerprint`() {
-        assertThat(LegacyFingerprint.isAvailable(context)).isTrue()
+        assertThat(LegacyFingerprintFallback.isAvailable(context)).isTrue()
     }
 
     @Test
     fun `isAvailable is false without a secure lock screen`() {
         every { keyguardManager.isDeviceSecure } returns false
-        assertThat(LegacyFingerprint.isAvailable(context)).isFalse()
+        assertThat(LegacyFingerprintFallback.isAvailable(context)).isFalse()
     }
 
     @Test
     fun `isAvailable is false when no fingerprint is enrolled`() {
         every { fingerprintManager.hasEnrolledFingerprints() } returns false
-        assertThat(LegacyFingerprint.isAvailable(context)).isFalse()
+        assertThat(LegacyFingerprintFallback.isAvailable(context)).isFalse()
     }
 
     @Test
     fun `fingerprint is required for crypto only on listed vendors running API 28`() {
-        assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 28, "samsung", "SM-G960F")).isTrue()
-        assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 29, "samsung", "SM-G960F")).isFalse()
-        assertThat(LegacyFingerprint.requiresFingerprintForCrypto(context, 28, "Google", "Pixel 3")).isFalse()
+        assertThat(LegacyFingerprintFallback.requiresFingerprintForCrypto(context, 28, "samsung", "SM-G960F")).isTrue()
+        assertThat(LegacyFingerprintFallback.requiresFingerprintForCrypto(context, 29, "samsung", "SM-G960F")).isFalse()
+        assertThat(LegacyFingerprintFallback.requiresFingerprintForCrypto(context, 28, "Google", "Pixel 3")).isFalse()
     }
 
     @Test
     fun `error codes BiometricPrompt does not define are reported as ERROR_VENDOR`() {
-        assertThat(LegacyFingerprint.toBiometricPromptError(BiometricPrompt.ERROR_LOCKOUT))
+        assertThat(LegacyFingerprintFallback.toBiometricPromptError(BiometricPrompt.ERROR_LOCKOUT))
             .isEqualTo(BiometricPrompt.ERROR_LOCKOUT)
         listOf(1000, 1003, 6).forEach {
-            assertThat(LegacyFingerprint.toBiometricPromptError(it)).isEqualTo(BiometricPrompt.ERROR_VENDOR)
+            assertThat(LegacyFingerprintFallback.toBiometricPromptError(it)).isEqualTo(BiometricPrompt.ERROR_VENDOR)
         }
     }
 
     @Test
     fun `the callback relay forwards to its target until the target is cleared`() {
         val target = mockk<FingerprintManager.AuthenticationCallback>(relaxed = true)
-        val relay = LegacyFingerprint.CallbackRelay(target)
+        val relay = LegacyFingerprintFallback.CallbackRelay(target)
 
         relay.onAuthenticationError(BiometricPrompt.ERROR_CANCELED, "canceled")
         relay.target = null

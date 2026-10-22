@@ -37,7 +37,7 @@ internal class BiometricAuthenticationHandler(
     /**
      * On API 28 and 29 a fingerprint enrolled with the platform also counts, because androidx.biometric
      * answers fingerprint availability there through a class the application's androidx.core can reduce
-     * to a no-op. See [LegacyFingerprint].
+     * to a no-op. See [LegacyFingerprintFallback].
      */
     override fun isSupported(context: Context): Boolean {
         val biometricManager = BiometricManager.from(context)
@@ -45,7 +45,7 @@ internal class BiometricAuthenticationHandler(
             BiometricManager.Authenticators.BIOMETRIC_STRONG
         ) == BiometricManager.BIOMETRIC_SUCCESS
         return strongBiometricAvailable ||
-            (Build.VERSION.SDK_INT < Build.VERSION_CODES.R && LegacyFingerprint.isAvailable(context))
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.R && LegacyFingerprintFallback.isAvailable(context))
     }
 
     override suspend fun authenticate(
@@ -53,10 +53,14 @@ internal class BiometricAuthenticationHandler(
         fido2PromptInfo: Fido2PromptInfo?,
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult =
-        if (signatureProvider != null && LegacyFingerprint.requiresFingerprintForCrypto(activity)) {
+        if (signatureProvider != null && LegacyFingerprintFallback.requiresFingerprintForCrypto(activity)) {
             withContext(authHandlerDispatcher) {
                 Fido2UserAuthResult(
-                    signature = LegacyFingerprint.authenticate(activity, fido2PromptInfo, signatureProvider())
+                    signature = LegacyFingerprintFallback.authenticate(
+                        activity,
+                        buildPromptInfo(fido2PromptInfo),
+                        signatureProvider()
+                    )
                 )
             }
         } else {
@@ -69,16 +73,7 @@ internal class BiometricAuthenticationHandler(
         signatureProvider: (() -> Signature)?
     ): Fido2UserAuthResult = withContext(authHandlerDispatcher) {
         suspendCancellableCoroutine { continuation ->
-            val promptInfo =
-                BiometricPrompt.PromptInfo.Builder()
-                    .setTitle(fido2PromptInfo?.title ?: "Biometric Authentication")
-                    .setSubtitle(fido2PromptInfo?.subtitle ?: "Enter biometric credentials to proceed")
-                    .setDescription(
-                        fido2PromptInfo?.description
-                            ?: "Input your Fingerprint or FaceID to ensure it's you!",
-                    )
-                    .setNegativeButtonText(fido2PromptInfo?.negativeButtonText ?: "Cancel")
-                    .build()
+            val promptInfo = buildPromptInfo(fido2PromptInfo)
 
             val biometricPrompt =
                 BiometricPrompt(
@@ -126,4 +121,16 @@ internal class BiometricAuthenticationHandler(
             }
         }
     }
+
+    private fun buildPromptInfo(
+        info: Fido2PromptInfo?,
+        defaultDescription: String =
+            "Input your Fingerprint or FaceID to ensure it's you!",
+    ): BiometricPrompt.PromptInfo =
+        BiometricPrompt.PromptInfo.Builder()
+            .setTitle(info?.title ?: "Biometric Authentication")
+            .setSubtitle(info?.subtitle ?: "Enter biometric credentials to proceed")
+            .setDescription(info?.description ?: defaultDescription)
+            .setNegativeButtonText(info?.negativeButtonText ?: "Cancel")
+            .build()
 }
