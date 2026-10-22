@@ -50,10 +50,12 @@ import com.linecorp.webauthn.util.Fido2Util
 import com.linecorp.webauthn.util.MockCredentialSourceStorage
 import com.linecorp.webauthn.util.toBase64url
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
+import io.mockk.verify
 import java.security.KeyPairGenerator
 import kotlin.reflect.KClass
 import kotlinx.coroutines.async
@@ -254,6 +256,33 @@ class PublicKeyCredentialTest {
             assertThat(authResult.isFailure).isTrue()
             assertThat(authResult.exceptionOrNull()).isInstanceOf(exceptionType.java)
         }
+    }
+
+    @Test
+    fun `deleteAllAccounts cleans up every stored credential off the caller thread`(): Unit = runBlocking {
+        val callerThread = Thread.currentThread()
+        every { mockAuthenticator.db } returns mockDb
+        coEvery { mockAuthenticator.cleanup(any()) } coAnswers {
+            assertThat(Thread.currentThread()).isNotSameInstanceAs(callerThread)
+            mockDb.delete(firstArg())
+        }
+        val credentials = AuthenticatorType.entries.mapIndexed { index, type ->
+            PublicKeyCredentialSource(
+                id = "credential-$index",
+                rpId = registeredRpEntity.id,
+                userHandle = registeredUserEntity.id,
+                aaguid = type.aaguid,
+            )
+        }
+        credentials.forEach(mockDb::store)
+
+        publicKeyCredential.deleteAllAccounts()
+
+        verify(exactly = 1) { mockAuthenticatorProvider.getAuthenticator(any(), any(), any()) }
+        credentials.forEach { credential ->
+            coVerify(exactly = 1) { mockAuthenticator.cleanup(credential.id) }
+        }
+        assertThat(mockDb.loadAll()).isEmpty()
     }
 
     private fun generateString(pattern: String, length: Int): String =

@@ -16,6 +16,23 @@
 
 package com.linecorp.webauthn.util
 
+import android.os.Bundle
 import androidx.fragment.app.FragmentActivity
 
-class TestFragmentActivity : FragmentActivity()
+class TestFragmentActivity : FragmentActivity() {
+    companion object {
+        var onCreateAction: ((TestFragmentActivity) -> Unit)? = null
+    }
+
+    var afterDestroy: (() -> Unit)? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        onCreateAction?.also { onCreateAction = null }?.invoke(this)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        afterDestroy?.invoke()
+    }
+}
