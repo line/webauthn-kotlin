@@ -62,7 +62,7 @@ internal class BiometricAuthenticationHandler(
             Fido2UserAuthResult(
                 signature = LegacyFingerprintFallback.authenticate(
                     activity,
-                    buildPromptInfo(fido2PromptInfo),
+                    buildPromptInfo(fido2PromptInfo, "Use your fingerprint to verify your identity."),
                     signature
                 )
             )
@@ -135,7 +135,7 @@ internal class BiometricAuthenticationHandler(
     private fun buildPromptInfo(
         info: Fido2PromptInfo?,
         defaultDescription: String =
-            "Input your Fingerprint or FaceID to ensure it's you!",
+            "Use a supported biometric, such as fingerprint or face recognition, to verify your identity.",
     ): BiometricPrompt.PromptInfo =
         BiometricPrompt.PromptInfo.Builder()
             .setTitle(info?.title ?: "Biometric Authentication")
