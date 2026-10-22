@@ -136,11 +136,10 @@ internal class BiometricAuthenticationHandler(
         info: Fido2PromptInfo?,
         defaultDescription: String =
             "Use a supported biometric, such as fingerprint or face recognition, to verify your identity.",
-    ): BiometricPrompt.PromptInfo =
-        BiometricPrompt.PromptInfo.Builder()
-            .setTitle(info?.title ?: "Biometric Authentication")
-            .setSubtitle(info?.subtitle ?: "Enter biometric credentials to proceed")
-            .setDescription(info?.description ?: defaultDescription)
-            .setNegativeButtonText(info?.negativeButtonText ?: "Cancel")
-            .build()
+    ): BiometricPrompt.PromptInfo = BiometricPrompt.PromptInfo.Builder()
+        .setTitle(info?.title ?: "Biometric Authentication")
+        .setSubtitle(info?.subtitle ?: "Enter biometric credentials to proceed")
+        .setDescription(info?.description ?: defaultDescription)
+        .setNegativeButtonText(info?.negativeButtonText ?: "Cancel")
+        .build()
 }

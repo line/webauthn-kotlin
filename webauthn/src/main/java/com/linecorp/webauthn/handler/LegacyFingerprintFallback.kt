@@ -189,7 +189,13 @@ internal object LegacyFingerprintFallback {
                 return@suspendCancellableCoroutine
             }
             val request = fingerprintRequest ?: FingerprintRequest { requestedSignature, signal, callback, handler ->
-                manager!!.authenticate(FingerprintManager.CryptoObject(requestedSignature), signal, 0, callback, handler)
+                manager!!.authenticate(
+                    FingerprintManager.CryptoObject(requestedSignature),
+                    signal,
+                    0,
+                    callback,
+                    handler
+                )
             }
             prompt.onError = { code, message -> fail(code, message) }
 
@@ -254,8 +260,12 @@ internal object LegacyFingerprintFallback {
             val negativeText = info.negativeButtonText
             return AlertDialog.Builder(requireContext())
                 .setTitle(info.title)
-                .setMessage(messageWith(status ?: getString(androidx.biometric.R.string.fingerprint_dialog_touch_sensor)))
-                .setNegativeButton(negativeText) { _, _ -> onError?.invoke(BiometricPrompt.ERROR_NEGATIVE_BUTTON, negativeText) }
+                .setMessage(
+                    messageWith(status ?: getString(androidx.biometric.R.string.fingerprint_dialog_touch_sensor))
+                )
+                .setNegativeButton(negativeText) { _, _ ->
+                    onError?.invoke(BiometricPrompt.ERROR_NEGATIVE_BUTTON, negativeText)
+                }
                 .create()
                 .also { it.setCanceledOnTouchOutside(false) }
         }
@@ -272,7 +282,10 @@ internal object LegacyFingerprintFallback {
         override fun onStop() {
             super.onStop()
             if (activity?.isChangingConfigurations == false) {
-                onError?.invoke(BiometricPrompt.ERROR_CANCELED, "The activity left the foreground during authentication.")
+                onError?.invoke(
+                    BiometricPrompt.ERROR_CANCELED,
+                    "The activity left the foreground during authentication."
+                )
             }
         }
 
@@ -286,10 +299,9 @@ internal object LegacyFingerprintFallback {
             (dialog as? AlertDialog)?.setMessage(messageWith(message))
         }
 
-        private fun messageWith(message: CharSequence): String {
-            return listOf(promptInfo?.subtitle, promptInfo?.description, message)
+        private fun messageWith(message: CharSequence): String =
+            listOf(promptInfo?.subtitle, promptInfo?.description, message)
                 .filterNot { it.isNullOrEmpty() }.joinToString("\n\n")
-        }
     }
 
     // FingerprintManager retains its last callback; clear the target when the request ends.

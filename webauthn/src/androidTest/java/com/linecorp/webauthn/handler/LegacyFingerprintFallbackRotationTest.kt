@@ -93,9 +93,11 @@ class LegacyFingerprintFallbackRotationTest {
         val initialState = AtomicReference<Lifecycle.State>()
         TestFragmentActivity.onCreateAction = { activity ->
             initialState.set(activity.lifecycle.currentState)
-            authentication.set(scope.async(start = CoroutineStart.UNDISPATCHED) {
-                LegacyFingerprintFallback.authenticate(activity, promptInfo, signature, request)
-            })
+            authentication.set(
+                scope.async(start = CoroutineStart.UNDISPATCHED) {
+                    LegacyFingerprintFallback.authenticate(activity, promptInfo, signature, request)
+                }
+            )
         }
         scenario = ActivityScenario.launch(TestFragmentActivity::class.java)
 
@@ -166,9 +168,11 @@ class LegacyFingerprintFallbackRotationTest {
         scenario.onActivity { activity.set(it) }
         scenario.moveToState(Lifecycle.State.CREATED)
         instrumentation.runOnMainSync {
-            authentication.set(scope.async(start = CoroutineStart.UNDISPATCHED) {
-                LegacyFingerprintFallback.authenticate(activity.get(), promptInfo, signature, request)
-            })
+            authentication.set(
+                scope.async(start = CoroutineStart.UNDISPATCHED) {
+                    LegacyFingerprintFallback.authenticate(activity.get(), promptInfo, signature, request)
+                }
+            )
         }
 
         assertError(authentication.get(), BiometricPrompt.ERROR_CANCELED)
@@ -198,9 +202,11 @@ class LegacyFingerprintFallbackRotationTest {
     fun backgroundCallerUsesMainThreadAndCancellationIgnoresLateCallbacks() {
         val authentication = AtomicReference<Deferred<Signature>>()
         scenario.onActivity { activity ->
-            authentication.set(scope.async(Dispatchers.Default) {
-                LegacyFingerprintFallback.authenticate(activity, promptInfo, signature, request)
-            })
+            authentication.set(
+                scope.async(Dispatchers.Default) {
+                    LegacyFingerprintFallback.authenticate(activity, promptInfo, signature, request)
+                }
+            )
         }
         assertTrue(request.started.await(5, TimeUnit.SECONDS))
         assertSame(Looper.getMainLooper(), request.looper.get())
@@ -229,9 +235,11 @@ class LegacyFingerprintFallbackRotationTest {
     private fun authenticate(): Deferred<Signature> {
         val authentication = AtomicReference<Deferred<Signature>>()
         scenario.onActivity { activity ->
-            authentication.set(scope.async(start = CoroutineStart.UNDISPATCHED) {
-                LegacyFingerprintFallback.authenticate(activity, promptInfo, signature, request)
-            })
+            authentication.set(
+                scope.async(start = CoroutineStart.UNDISPATCHED) {
+                    LegacyFingerprintFallback.authenticate(activity, promptInfo, signature, request)
+                }
+            )
             assertTrue(authentication.get().isActive)
         }
         return authentication.get()
@@ -246,7 +254,8 @@ class LegacyFingerprintFallbackRotationTest {
     }
 
     private fun assertError(authentication: Deferred<Signature>, code: Int) {
-        val error = assertThrows(AuthenticationHandler.AuthenticationErrorException::class.java) { await(authentication) }
+        val error =
+            assertThrows(AuthenticationHandler.AuthenticationErrorException::class.java) { await(authentication) }
         assertEquals(code, error.errorCode)
     }
 
