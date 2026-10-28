@@ -1,5 +1,13 @@
 # Change Log
 
+## 1.1.6 (2026-10-28)
+
+### Fixed
+
+- R8 builds failed when the application's compile SDK no longer provided the legacy
+  `FingerprintManager` classes referenced by the Android 9 and 10 compatibility paths. The AAR now
+  includes consumer rules suppressing missing-class diagnostics for those four platform types.
+
 ## 1.1.5 (2026-10-16)
 
 A fix release for biometric authentication on Android 9 and 10, for the encoding of the credential
